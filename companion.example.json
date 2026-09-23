@@ -12,6 +12,11 @@
   "eyes": true,
   "language": "auto",
   "user_context": "",
+  "toast_position": {
+    "anchor": "top-right",
+    "margin_x": 0,
+    "margin_y": 0
+  },
   "vision": {
     "model": "",
     "effort": "low",

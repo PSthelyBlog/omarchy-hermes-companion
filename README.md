@@ -102,6 +102,7 @@ Frames are skipped for password managers, private browsing, banking/OTP windows 
 | `eyes` | `true` | screen-watching on at daemon start (`toggle-eyes` / Super+Alt+E changes it at runtime only) |
 | `actions` | `false` | let requests delegate shell/file work to a helper subagent (see *Actions*) |
 | `notify` | `true` | also send spoken remarks as desktop notifications |
+| `toast_position` | `{"anchor": "top-right", "margin_x": 0, "margin_y": 0}` | corner for toasts (`top-right`, `top-left`, `bottom-right`, `bottom-left`) plus extra pixels from that corner; applies without restart |
 | `vision` / `reasoning` | `{model, effort, thinking}` | `provider:model`, `low|medium|high`, extended thinking on/off; empty reasoning model = same as vision |
 | `tick_seconds` | `25` | screen check interval |
 | `change_threshold` | `12` | dHash distance below which a frame counts as unchanged; unchanged screens are only re-checked every ~2 min |
@@ -113,7 +114,7 @@ Frames are skipped for password managers, private browsing, banking/OTP windows 
 ## Commands
 ```
 CTL="$HOME/.hermes/hermes-agent/venv/bin/python $HOME/.config/omarchy/plugins/hermes.companion/daemon/companion.py --ctl"
-$CTL status | toggle-eyes | listen | toggle-mute | toggle-toasts | toggle-actions | decide <yes|no> | hush | tick | models | set-vision <provider:model> | set-reasoning <provider:model|same> | set-{vision,reasoning}-effort <low|medium|high> | toggle-{vision,reasoning}-thinking | set-language <auto|language name> | set-user-context <text|(empty)> | say <text> | ask <text> | toast <text> | quit
+$CTL status | toggle-eyes | listen | toggle-mute | toggle-toasts | toggle-actions | decide <yes|no> | hush | tick | models | set-vision <provider:model> | set-reasoning <provider:model|same> | set-{vision,reasoning}-effort <low|medium|high> | toggle-{vision,reasoning}-thinking | set-language <auto|language name> | set-user-context <text|(empty)> | set-toast-position <anchor>[,<margin_x>[,<margin_y>]] | say <text> | ask <text> | toast <text> | quit
 # ask / text: same as speaking to it (reply is toasted + spoken); text is what the panel's input box sends
 journalctl --user -fu hermes-companion
 ```
