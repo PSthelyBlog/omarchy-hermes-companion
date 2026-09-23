@@ -62,8 +62,9 @@ DEFAULTS = {
     "user_context": "",
     # Where the toast stack spawns and how far it sits from that corner. anchor is one of
     # top-right/top-left/bottom-right/bottom-left; margin_x/margin_y are extra pixels added
-    # on top of the bar clearance + base gap the shell already reserves.
-    "toast_position": {"anchor": "top-right", "margin_x": 0, "margin_y": 0},
+    # on top of the bar clearance + base gap the shell already reserves. bottom-right is the
+    # default because toasts were hardcoded there before the corner became configurable.
+    "toast_position": {"anchor": "bottom-right", "margin_x": 0, "margin_y": 0},
 }
 
 _TOAST_ANCHORS = ("top-right", "top-left", "bottom-right", "bottom-left")

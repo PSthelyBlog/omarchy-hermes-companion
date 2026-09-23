@@ -102,7 +102,7 @@ Frames are skipped for password managers, private browsing, banking/OTP windows 
 | `eyes` | `true` | screen-watching on at daemon start (`toggle-eyes` / Super+Alt+E changes it at runtime only) |
 | `actions` | `false` | let requests delegate shell/file work to a helper subagent (see *Actions*) |
 | `notify` | `true` | also send spoken remarks as desktop notifications |
-| `toast_position` | `{"anchor": "top-right", "margin_x": 0, "margin_y": 0}` | corner for toasts (`top-right`, `top-left`, `bottom-right`, `bottom-left`) plus extra pixels from that corner; applies without restart |
+| `toast_position` | `{"anchor": "bottom-right", "margin_x": 0, "margin_y": 0}` | corner for toasts (`top-right`, `top-left`, `bottom-right`, `bottom-left`) plus extra pixels from that corner; applies without restart |
 | `vision` / `reasoning` | `{model, effort, thinking}` | `provider:model`, `low|medium|high`, extended thinking on/off; empty reasoning model = same as vision |
 | `tick_seconds` | `25` | screen check interval |
 | `change_threshold` | `12` | dHash distance below which a frame counts as unchanged; unchanged screens are only re-checked every ~2 min |

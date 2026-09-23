@@ -71,7 +71,7 @@ Item {
   readonly property int toastWidth: Style.space(420)
   // Where the toast stack spawns and how far from that corner — set via
   // companion.json's toast_position or `--ctl set-toast-position <anchor>,<mx>,<my>`.
-  property string toastAnchor: "top-right"
+  property string toastAnchor: "bottom-right"
   property int toastMarginX: 0
   property int toastMarginY: 0
   readonly property bool toastAnchorTop: toastAnchor === "top-right" || toastAnchor === "top-left"
