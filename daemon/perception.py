@@ -29,6 +29,9 @@ SENSITIVE_TITLE_RE = re.compile(
     r"private window|fenêtre privée|navigation privée)",
     re.I,
 )
+# Layer-shell namespaces of notification popups. Their text (OTP codes, message previews) can't
+# be read, so a frame is skipped while one is up.
+NOTIFICATION_LAYERS = {"omarchy-notifications"}
 
 
 @dataclass
@@ -53,6 +56,7 @@ class Frame:
     idle_seconds: float
     ts: float = field(default_factory=time.time)
     phash: Optional[str] = None
+    blocked_by: str = ""  # why no frame was captured (private window, notification…), "" if not blocked
 
     def data_url(self) -> Optional[str]:
         if not self.jpeg:
@@ -82,15 +86,58 @@ def active_window() -> WindowInfo:
     )
 
 
-def focused_monitor() -> Optional[str]:
+def focused_monitor() -> dict:
+    """`hyprctl monitors -j` entry of the focused monitor ({} if unavailable)."""
     try:
         mons = json.loads(_run(["hyprctl", "monitors", "-j"]) or b"[]")
         for m in mons:
             if m.get("focused"):
-                return m["name"]
-        return mons[0]["name"] if mons else None
+                return m
+        return mons[0] if mons else {}
     except Exception:
-        return None
+        return {}
+
+
+def on_screen(mon: dict, clients: list[dict]) -> list[WindowInfo]:
+    """Windows whose rectangle overlaps `mon`, i.e. what grim will capture there.
+
+    Hyprland's `visible` flag only means "not hidden": in a scrolling layout, windows far off the
+    viewport report visible too, so geometry decides. Stacking is ignored (a window behind a
+    fullscreen one still counts), which errs on the side of not looking."""
+    scale = mon.get("scale") or 1
+    w, h = mon["width"] / scale, mon["height"] / scale
+    if mon.get("transform", 0) % 2:  # rotated 90°/270°: logical width and height swap
+        w, h = h, w
+    mx, my = mon["x"], mon["y"]
+    shown = {mon["activeWorkspace"]["id"], (mon.get("specialWorkspace") or {}).get("id", 0)} - {0}
+    out = []
+    for c in clients:
+        if not c.get("mapped") or c.get("hidden"):
+            continue
+        if c["workspace"]["id"] not in shown and not (c.get("pinned") and c.get("monitor") == mon["id"]):
+            continue
+        (x, y), (cw, ch) = c["at"], c["size"]
+        if x < mx + w and x + cw > mx and y < my + h and y + ch > my:
+            out.append(WindowInfo(cls=c.get("class") or "", title=c.get("title") or ""))
+    return out
+
+
+def screen_blocker(mon: dict) -> str:
+    """Why the focused monitor must not be captured right now ("" = fine to capture).
+
+    Fails closed: if Hyprland can't tell us what is on screen, we don't look."""
+    try:
+        clients = json.loads(_run(["hyprctl", "clients", "-j"]))
+        layers = json.loads(_run(["hyprctl", "layers", "-j"]))
+        visible = on_screen(mon, clients)
+        levels = (layers.get(mon["name"]) or {}).get("levels") or {}
+        notifying = any(l.get("namespace") in NOTIFICATION_LAYERS for ls in levels.values() for l in ls)
+    except Exception:
+        return "window check failed"
+    for w in visible:
+        if w.sensitive:
+            return f"private window: {w.cls}"
+    return "notification popup" if notifying else ""
 
 
 def session_locked() -> bool:
@@ -143,7 +190,11 @@ def mic_in_use() -> bool:
 def screen_shared() -> bool:
     """True while a screencast / recorder is active (portal screencast session, wf-recorder, gpu-screen-recorder, obs)."""
     try:
-        if _run(["pgrep", "-x", "wf-recorder|gpu-screen-recorder|obs"]).strip():
+        if _run(["pgrep", "-x", "wf-recorder|obs"]).strip():
+            return True
+        # The kernel cuts process names to 15 chars ("gpu-screen-reco"), so -x can never match it;
+        # match the command line the way omarchy-capture-screenrecording checks its own recording.
+        if _run(["pgrep", "-f", "^gpu-screen-recorder"]).strip():
             return True
         out = _run(["pw-dump"], timeout=3).decode()
         # portal screencast nodes are named like "xdg-desktop-portal-hyprland" video sources with a running consumer
@@ -203,11 +254,18 @@ class Perceiver:
     def observe(self, eyes_enabled: bool = True) -> Frame:
         win = active_window()
         idle = idle_seconds()
-        if not eyes_enabled or win.sensitive or session_locked():
+        if not eyes_enabled or session_locked():
             self._last_hash = None
             return Frame(window=win, jpeg=None, changed=False, idle_seconds=idle)
+        # Checked last (session_locked can take seconds) so the check is as close to grim as possible.
+        mon = focused_monitor()
+        blocked_by = f"private window: {win.cls}" if win.sensitive else (
+            screen_blocker(mon) if mon else "window check failed")
+        if blocked_by:
+            self._last_hash = None
+            return Frame(window=win, jpeg=None, changed=False, idle_seconds=idle, blocked_by=blocked_by)
 
-        jpeg = grab_jpeg(focused_monitor(), self.max_width)
+        jpeg = grab_jpeg(mon["name"], self.max_width)
         if not jpeg:
             return Frame(window=win, jpeg=None, changed=False, idle_seconds=idle)
         try:

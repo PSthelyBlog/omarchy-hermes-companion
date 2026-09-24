@@ -22,7 +22,7 @@ from actions import Approver, audit, install_hook, parse_yes_no  # noqa: E402
 try:
     from brain import CompanionAgent, ModelSpec  # noqa: E402
     from catalog import Catalog  # noqa: E402
-    from perception import Perceiver  # noqa: E402
+    from perception import Perceiver, screen_shared  # noqa: E402
     from policy import PolicyConfig, SpeechPolicy  # noqa: E402
     if "--ctl" not in sys.argv:
         import run_agent  # noqa: E402,F401  (real Hermes probe; brain imports it lazily)
@@ -255,8 +255,8 @@ class Companion:
         self.state.update(ticks=self.state.get("ticks", 0) + 1)
         if not self.state.get("eyes"):
             return
-        if frame.window.sensitive:
-            self.state.update(last_observation=f"(private window: {frame.window.cls}) — not looking")
+        if frame.blocked_by:
+            self.state.update(last_observation=f"({frame.blocked_by}) — not looking")
             return
         if frame.idle_seconds > self.cfg.get("idle_skip_seconds", 300):
             return  # user away: no point burning tokens
@@ -288,9 +288,12 @@ class Companion:
         self.state.update(last_observation=res["observation"])
         self.set_status("watching")
         wants = bool(res["should_speak"] and res["text"])
+        # Checked after the model turn (it takes seconds): unprompted output must not be drawn
+        # into a screen share or recording. Replies to the user's own requests still toast.
+        sharing = screen_shared()
         if not wants:
             # Every model output is surfaced as a toast; silent observations are shown dimmed.
-            if res["observation"]:
+            if res["observation"] and not sharing:
                 self.state.toast(res["observation"], "observation")
             return
         ok, why = self.policy.may_speak(frame, res["urgency"], self.state.get("muted"))
@@ -303,6 +306,9 @@ class Companion:
             if self.cfg.get("notify"):
                 notify("Hermes", res["text"], res["urgency"])
             self.say(res["text"])
+        elif sharing:
+            # Screen is shared/recorded: keep it off-screen, in the panel's recent list.
+            self.state.add_remark(res["text"], "held")
         else:
             # Policy blocked the voice; still show it (with the reason) so nothing is lost.
             self.state.toast(res["text"], "held", why)
