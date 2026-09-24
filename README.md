@@ -74,7 +74,8 @@ actions. Every child command passes through Hermes' own safety gate plus the com
 Audit log: `~/.local/state/hermes-companion/actions.jsonl` (every run, write, approval, refusal).
 
 ## Privacy
-Frames are skipped for password managers, private browsing, banking/OTP windows and the lock screen (see
+Frames are skipped while any window on the captured monitor (not just the focused one) is a password manager,
+private browsing, or a banking/OTP window, while a notification popup is showing, and on the lock screen (see
 `daemon/perception.py`); you can pause the eyes anytime from the widget or `Super+Alt+E`.
 
 ## Layout

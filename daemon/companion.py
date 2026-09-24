@@ -255,8 +255,8 @@ class Companion:
         self.state.update(ticks=self.state.get("ticks", 0) + 1)
         if not self.state.get("eyes"):
             return
-        if frame.window.sensitive:
-            self.state.update(last_observation=f"(private window: {frame.window.cls}) — not looking")
+        if frame.blocked_by:
+            self.state.update(last_observation=f"({frame.blocked_by}) — not looking")
             return
         if frame.idle_seconds > self.cfg.get("idle_skip_seconds", 300):
             return  # user away: no point burning tokens
