@@ -143,7 +143,11 @@ def mic_in_use() -> bool:
 def screen_shared() -> bool:
     """True while a screencast / recorder is active (portal screencast session, wf-recorder, gpu-screen-recorder, obs)."""
     try:
-        if _run(["pgrep", "-x", "wf-recorder|gpu-screen-recorder|obs"]).strip():
+        if _run(["pgrep", "-x", "wf-recorder|obs"]).strip():
+            return True
+        # The kernel cuts process names to 15 chars ("gpu-screen-reco"), so -x can never match it;
+        # match the command line the way omarchy-capture-screenrecording checks its own recording.
+        if _run(["pgrep", "-f", "^gpu-screen-recorder"]).strip():
             return True
         out = _run(["pw-dump"], timeout=3).decode()
         # portal screencast nodes are named like "xdg-desktop-portal-hyprland" video sources with a running consumer
