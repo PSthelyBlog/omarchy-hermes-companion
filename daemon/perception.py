@@ -147,16 +147,18 @@ def screen_blocker(mon: dict) -> str:
     return private[0] if private else ""
 
 
-def session_locked() -> bool:
+def lock_blocker() -> str:
+    """Why the session counts as locked ("" = unlocked).
+
+    Fails closed: if the shell can't answer, we don't look."""
     try:
-        out = _run(["pgrep", "-x", "hyprlock"]).strip()
-        if out:
-            return True
-        # Omarchy 4 lock lives in omarchy-shell; ask it.
-        out = _run(["omarchy-shell", "shell", "isLocked"], timeout=2).decode().strip().lower()
-        return out in ("true", "1", "yes")
+        if _run(["pgrep", "-x", "hyprlock"]).strip():
+            return "lock screen"
+        # Omarchy 4's lock is the shell's `lock` plugin; isLocked is already true while a lock is pending.
+        out = _run(["omarchy-shell", "lock", "isLocked"], timeout=2).decode().strip()
     except Exception:
-        return False
+        return "lock state unknown"
+    return {"false": "", "true": "lock screen"}.get(out, "lock state unknown")
 
 
 def idle_seconds() -> float:
@@ -261,10 +263,16 @@ class Perceiver:
     def observe(self, eyes_enabled: bool = True) -> Frame:
         win = active_window()
         idle = idle_seconds()
-        if not eyes_enabled or session_locked():
+        if not eyes_enabled:
             self._last_hash = None
             return Frame(window=win, jpeg=None, changed=False, idle_seconds=idle)
-        # Checked last (session_locked can take seconds) so the check is as close to grim as possible.
+        # A locked frame must carry blocked_by, or tick() treats it as an unchanged screen and
+        # still sends the title of the window behind the lock every ~2 min.
+        locked = lock_blocker()
+        if locked:
+            self._last_hash = None
+            return Frame(window=win, jpeg=None, changed=False, idle_seconds=idle, blocked_by=locked)
+        # Checked last (the lock check is an IPC round trip) so the check is as close to grim as possible.
         mon = focused_monitor()
         blocked_by = f"private window: {win.cls}" if win.sensitive else (
             screen_blocker(mon) if mon else "window check failed")
