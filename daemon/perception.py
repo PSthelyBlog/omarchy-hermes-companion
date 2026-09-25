@@ -29,9 +29,15 @@ SENSITIVE_TITLE_RE = re.compile(
     r"private window|fenêtre privée|navigation privée)",
     re.I,
 )
-# Layer-shell namespaces of notification popups. Their text (OTP codes, message previews) can't
-# be read, so a frame is skipped while one is up.
-NOTIFICATION_LAYERS = {"omarchy-notifications"}
+# Layer-shell namespaces of shell overlays that put private content on screen. They are not
+# clients, so SENSITIVE_CLASS_RE never sees them and their text can't be read; a frame is
+# skipped while one is up. Each is mapped only while open.
+PRIVATE_LAYERS = {
+    "omarchy-notifications": "notification popup",  # OTP codes, message previews
+    "omarchy-clipboard": "clipboard history",
+    "omarchy-polkit": "authentication prompt",
+    "omarchy-network-qr": "Wi-Fi QR code",  # the code encodes the network password
+}
 
 
 @dataclass
@@ -131,13 +137,14 @@ def screen_blocker(mon: dict) -> str:
         layers = json.loads(_run(["hyprctl", "layers", "-j"]))
         visible = on_screen(mon, clients)
         levels = (layers.get(mon["name"]) or {}).get("levels") or {}
-        notifying = any(l.get("namespace") in NOTIFICATION_LAYERS for ls in levels.values() for l in ls)
+        private = [PRIVATE_LAYERS[l.get("namespace")] for ls in levels.values() for l in ls
+                   if l.get("namespace") in PRIVATE_LAYERS]
     except Exception:
         return "window check failed"
     for w in visible:
         if w.sensitive:
             return f"private window: {w.cls}"
-    return "notification popup" if notifying else ""
+    return private[0] if private else ""
 
 
 def session_locked() -> bool:
