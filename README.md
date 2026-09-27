@@ -80,6 +80,9 @@ prompt or the Wi-Fi QR code is showing, and on the lock screen — or whenever t
 `daemon/perception.py`); you can pause the eyes anytime from the widget or `Super+Alt+E`. While the screen is shared
 or recorded, unprompted observations and remarks are not drawn as toasts (held remarks go to the panel's recent
 list); replies to your own requests still are.
+Secret values the models write out (API keys and tokens in well-known formats, private keys, `NAME=value` lines whose
+name ends in key/token/password…) are masked before they are toasted, stored, logged or spoken, and in split mode
+before the vision model's description reaches the reasoning model. Screenshots themselves are not altered.
 
 ## Layout
 - `daemon/companion.py`  main loop · `--ctl <cmd>` talks to the running daemon

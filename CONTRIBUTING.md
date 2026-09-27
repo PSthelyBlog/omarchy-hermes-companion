@@ -8,6 +8,6 @@ Thanks for helping. This plugin is installed straight from `main` by `omarchy pl
 4. **Say how you tested.** State what you ran live on Omarchy (voice request, screen tick, restart, multi-monitor…) and what you saw. Untested QML/daemon changes are not merged.
 5. **Don't touch the trust boundary casually**: `install.sh`, the systemd unit, `requirements.lock`, network calls, or the read-only tool set in `daemon/brain.py`. Changes there need an explicit explanation in the PR.
 
-CI only checks that the Python compiles and the JSON parses; the real review is a human reading the diff and running it. AI-assisted PRs are welcome — the same rules apply.
+CI only checks that the Python compiles, the JSON parses and the unit tests in `tests/` pass; the real review is a human reading the diff and running it. AI-assisted PRs are welcome — the same rules apply.
 
 Layout of the code is in the README under *Layout*; `--ctl` commands under *Commands*.
