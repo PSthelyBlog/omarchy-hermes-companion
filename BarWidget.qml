@@ -349,6 +349,7 @@ BarWidget {
         Button { text: "󰍬 Listen"; foreground: root.bar.foreground; tooltipText: "Ask Hermes by voice (also: right-click the icon)"; onClicked: root.control("listen") }
         Button { text: "Hush"; foreground: root.bar.foreground; onClicked: root.control("hush") }
         Button { text: "Look now"; foreground: root.bar.foreground; onClicked: root.control("tick") }
+        Button { text: "Forget"; foreground: root.bar.foreground; tooltipText: "Forget the conversation and everything seen on screen"; onClicked: root.control("forget") }
         Button { text: root.alive ? "Restart" : "Start"; foreground: root.bar.foreground; onClicked: root.service(root.alive ? "restart" : "start") }
         Button { text: "Stop"; foreground: root.bar.foreground; visible: root.alive; onClicked: root.service("stop") }
       }

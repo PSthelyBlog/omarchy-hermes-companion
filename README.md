@@ -83,8 +83,10 @@ list); replies to your own requests still are.
 Secret values the models write out (API keys and tokens in well-known formats, private keys, `NAME=value` lines whose
 name ends in key/token/password…) are masked before they are toasted, stored, logged or spoken, and in split mode
 before the vision model's description reaches the reasoning model. Screenshots themselves are not altered.
-Switching to a model from a different provider carries only your spoken/typed exchanges over, never the screen
-history.
+The conversation (and with it every frame, description and window title seen so far) is kept in memory until the
+daemon restarts or you press **Forget** in the panel (`--ctl forget`); pausing the eyes stops new captures but does
+not forget. Switching to a model from a different provider carries only your spoken/typed exchanges over, never the
+screen history.
 
 ## Layout
 - `daemon/companion.py`  main loop · `--ctl <cmd>` talks to the running daemon
@@ -123,8 +125,9 @@ history.
 ## Commands
 ```
 CTL="$HOME/.hermes/hermes-agent/venv/bin/python $HOME/.config/omarchy/plugins/hermes.companion/daemon/companion.py --ctl"
-$CTL status | toggle-eyes | listen | toggle-mute | toggle-toasts | toggle-actions | decide <yes|no> | hush | tick | models | set-vision <provider:model> | set-reasoning <provider:model|same> | set-{vision,reasoning}-effort <low|medium|high> | toggle-{vision,reasoning}-thinking | set-language <auto|language name> | set-user-context <text|(empty)> | set-toast-position <anchor>[,<margin_x>[,<margin_y>]] | say <text> | ask <text> | toast <text> | quit
+$CTL status | toggle-eyes | listen | toggle-mute | toggle-toasts | toggle-actions | decide <yes|no> | hush | tick | forget | models | set-vision <provider:model> | set-reasoning <provider:model|same> | set-{vision,reasoning}-effort <low|medium|high> | toggle-{vision,reasoning}-thinking | set-language <auto|language name> | set-user-context <text|(empty)> | set-toast-position <anchor>[,<margin_x>[,<margin_y>]] | say <text> | ask <text> | toast <text> | quit
 # ask / text: same as speaking to it (reply is toasted + spoken); text is what the panel's input box sends
+# forget: drop the conversation and everything seen so far (panel: Forget); a turn in flight is discarded
 journalctl --user -fu hermes-companion
 ```
 Keys: Super+Alt+H listen · Super+Alt+E eyes · Super+Alt+S hush. Bar icon: left = panel, right = listen, middle = hush.

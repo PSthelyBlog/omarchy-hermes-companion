@@ -235,6 +235,9 @@ class Companion:
             log.exception("ask")
             reply = "Sorry, I hit an error answering that."
             self.state.update(last_error=str(e))
+        if not reply:  # forgotten while in flight (or an empty model reply): nothing to show or say
+            self.set_status("watching")
+            return
         self.state.add_remark(f"You: {text}\nHermes: {reply}", "reply")
         self.state.toast(reply, "reply")
         self.say(reply)
@@ -488,6 +491,12 @@ class Companion:
             if self.voice:
                 self.voice.hush()
             return "hushed"
+        if op == "forget":
+            self.agent.forget()
+            self.perceiver.reset()
+            self.state.update(last_observation="", last_remark="", remarks=[])
+            self.state.toast("Forgot our conversation and everything I saw.", "reply")
+            return "forgotten"
         if op == "say" and arg:
             threading.Thread(target=self.say, args=(arg,), daemon=True).start()
             return "speaking"

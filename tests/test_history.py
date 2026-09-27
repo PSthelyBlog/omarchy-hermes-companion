@@ -1,4 +1,4 @@
-"""Conversation history: screen turns are dropped on a provider change.
+"""Conversation history: screen turns are dropped on a provider change, forget() wins over a turn in flight.
 
 CompanionAgent is built with __new__ so no Hermes agent (and no network) is needed."""
 import sys
@@ -83,6 +83,37 @@ class AdoptHistory(unittest.TestCase):
         new.adopt_history(old)
         self.assertEqual(new.history, request_with_tool("VOICE", "hi"))
         self.assertEqual(old.history, self.history)  # the old agent is left alone
+
+
+class Forget(unittest.TestCase):
+    def _hermes(self, during=None):
+        class Fake:
+            def run_conversation(_, content, system_message, conversation_history):
+                if during:
+                    during()
+                return {"messages": conversation_history + [{"role": "user", "content": content},
+                                                            {"role": "assistant", "content": "reply"}],
+                        "final_response": "reply"}
+        return Fake()
+
+    def test_turn_is_stored_normally(self):
+        a = agent()
+        self.assertEqual(a._turn("[TEXT REQUEST from P]\nhi", agent=self._hermes()), "reply")
+        self.assertEqual(len(a.history), 2)
+
+    def test_forget_clears_history(self):
+        a = agent(history=tick_split(1))
+        a.forget()
+        self.assertEqual(a.history, [])
+
+    def test_forget_during_a_turn_discards_that_turn(self):
+        a = agent(history=tick_split(1))
+        out = a._turn("[SCREEN TICK] 12:00", agent=self._hermes(during=a.forget))
+        self.assertEqual(out, "")
+        self.assertEqual(a.history, [])
+        # The next turn starts from the empty history.
+        a._turn("[TEXT REQUEST from P]\nhi", agent=self._hermes())
+        self.assertEqual([m["content"] for m in a.history], ["[TEXT REQUEST from P]\nhi", "reply"])
 
 
 if __name__ == "__main__":

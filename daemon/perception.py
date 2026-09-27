@@ -260,6 +260,10 @@ class Perceiver:
         self._last_hash: Optional[str] = None
         self._last_title: str = ""
 
+    def reset(self):
+        """Forget the last frame, so the next tick sends a fresh screenshot."""
+        self._last_hash = None
+
     def observe(self, eyes_enabled: bool = True) -> Frame:
         win = active_window()
         idle = idle_seconds()
