@@ -33,9 +33,11 @@ KEEP_IMAGES = 3  # most recent frames kept in context; older ones are replaced b
 DESCRIBE_PROMPT = (
     "You are the eyes of a desktop monitoring assistant. Describe this screenshot for a colleague "
     "who cannot see it, in at most 150 words of plain prose: the application and what the user is doing, "
-    "any error messages, stack traces, warnings, dialogs, failing checks, merge conflicts, secrets that look "
-    "exposed, meeting/notification banners, and anything a helpful colleague glancing over the shoulder "
-    "would point out. Quote short key strings verbatim (error text, file:line). No preamble, no markdown."
+    "any error messages, stack traces, warnings, dialogs, failing checks, merge conflicts, "
+    "meeting/notification banners, and anything a helpful colleague glancing over the shoulder "
+    "would point out. If a secret (API key, token, password, private key) is visible, say what kind it is "
+    "and where (file, line), but never copy any part of its value. Quote error messages and file:line "
+    "verbatim. No preamble, no markdown."
 )
 
 # Neutral default, used when companion.json sets no "user_context".
