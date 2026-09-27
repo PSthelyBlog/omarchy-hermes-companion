@@ -192,7 +192,7 @@ class Companion:
         self.cfg["actions"] = bool(enabled)
         self._persist_cfg({"actions": bool(enabled)})
         new = self._build_agent()
-        new.history = list(self.agent.history)
+        new.adopt_history(self.agent)
         self.agent = new
         self.state.update(actions=bool(enabled))
         audit({"kind": "actions", "enabled": bool(enabled)})
@@ -203,7 +203,7 @@ class Companion:
         self.cfg["language"] = language
         self._persist_cfg({"language": language})
         new = self._build_agent()
-        new.history = list(self.agent.history)
+        new.adopt_history(self.agent)
         self.agent = new
         self.state.update(language=language)
         return f"language={language}"
@@ -212,7 +212,7 @@ class Companion:
         self.cfg["user_context"] = user_context
         self._persist_cfg({"user_context": user_context})
         new = self._build_agent()
-        new.history = list(self.agent.history)
+        new.adopt_history(self.agent)
         self.agent = new
         self.state.update(user_context=user_context)
         return f"user_context={user_context or '(default)'}"
@@ -390,8 +390,9 @@ class Companion:
             self.state.update(last_error=f"model switch failed: {e}")
             self.set_status("watching")
             return f"error: {e}"
-        # carry the conversation over; don't block on an in-flight turn (may be in a retry backoff).
-        new.history = list(self.agent.history)
+        # carry the conversation over (without screen turns if the reasoning provider changed);
+        # don't block on an in-flight turn (may be in a retry backoff).
+        new.adopt_history(self.agent)
         self.agent = new
         self._persist_cfg({role: d})
         self.state.update(last_error="")

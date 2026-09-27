@@ -83,6 +83,8 @@ list); replies to your own requests still are.
 Secret values the models write out (API keys and tokens in well-known formats, private keys, `NAME=value` lines whose
 name ends in key/token/password…) are masked before they are toasted, stored, logged or spoken, and in split mode
 before the vision model's description reaches the reasoning model. Screenshots themselves are not altered.
+Switching to a model from a different provider carries only your spoken/typed exchanges over, never the screen
+history.
 
 ## Layout
 - `daemon/companion.py`  main loop · `--ctl <cmd>` talks to the running daemon

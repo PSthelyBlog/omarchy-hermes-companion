@@ -115,6 +115,30 @@ def _extract_json(text: str) -> Optional[dict]:
             return None
 
 
+_REQUEST_TAGS = ("[VOICE REQUEST", "[TEXT REQUEST")
+
+
+def _text_of(msg: dict) -> str:
+    c = msg.get("content")
+    if isinstance(c, list):
+        return " ".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+    return c if isinstance(c, str) else ""
+
+
+def _drop_screen_turns(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only voice/text request turns: the user message plus the assistant and tool messages
+    after it. Screen ticks (frames, descriptions, window titles, observations) and anything
+    unrecognised, such as Hermes' compaction summaries, are dropped. Whole turns go, so a tool
+    call is never separated from its result."""
+    out, keep = [], False
+    for m in history:
+        if m.get("role") == "user":
+            keep = _text_of(m).lstrip().startswith(_REQUEST_TAGS)
+        if keep:
+            out.append(m)
+    return out
+
+
 def _make_agent(spec: ModelSpec, user_name: str, system_prompt: str, tools: bool, max_iterations: int, actions: bool = False):
     from run_agent import AIAgent
 
@@ -207,6 +231,18 @@ class CompanionAgent:
         return _redact((result.get("final_response") or "").strip())
 
     # ------------------------------------------------------------------ API
+    def adopt_history(self, old: "CompanionAgent"):
+        """Continue `old`'s conversation after a rebuild (model, actions, language… changed).
+
+        The history is sent to the reasoning provider, so a new one gets only the request
+        turns: it must not receive frames, descriptions or titles captured for another."""
+        self.history = list(old.history)
+        if self.reasoning.provider != old.reasoning.provider:
+            kept = _drop_screen_turns(self.history)
+            log.info("reasoning provider %s -> %s: screen history not carried over (%d of %d messages kept)",
+                     old.reasoning.provider, self.reasoning.provider, len(kept), len(self.history))
+            self.history = kept
+
     def observe(self, text: str, image_data_url: Optional[str]) -> dict:
         """Feed one perception tick. Returns {observation, should_speak, urgency, text}."""
         if image_data_url and self.split:
