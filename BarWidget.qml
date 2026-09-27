@@ -349,7 +349,6 @@ BarWidget {
         Button { text: "󰍬 Listen"; foreground: root.bar.foreground; tooltipText: "Ask Hermes by voice (also: right-click the icon)"; onClicked: root.control("listen") }
         Button { text: "Hush"; foreground: root.bar.foreground; onClicked: root.control("hush") }
         Button { text: "Look now"; foreground: root.bar.foreground; onClicked: root.control("tick") }
-        Button { text: "Forget"; foreground: root.bar.foreground; tooltipText: "Forget the conversation and everything seen on screen"; onClicked: root.control("forget") }
         Button { text: root.alive ? "Restart" : "Start"; foreground: root.bar.foreground; onClicked: root.service(root.alive ? "restart" : "start") }
         Button { text: "Stop"; foreground: root.bar.foreground; visible: root.alive; onClicked: root.service("stop") }
       }
@@ -432,13 +431,30 @@ BarWidget {
       Rectangle { width: parent.width; height: 1; color: Qt.darker(root.bar.foreground, 3) }
 
       // ---- Recent remarks: scrollable, fixed height ----
-      Text {
-        textFormat: Text.PlainText
-        text: "Recent"
-        color: Qt.darker(root.bar.foreground, 1.4)
-        font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.caption
-        font.bold: true
+      // Forget sits here, not in the button rows (no room there): it also empties this list.
+      Item {
+        width: parent.width
+        height: Math.max(recentLabel.implicitHeight, forgetBtn.implicitHeight)
+        Text {
+          id: recentLabel
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: "Recent"
+          color: Qt.darker(root.bar.foreground, 1.4)
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+        Button {
+          id: forgetBtn
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Forget"
+          foreground: root.bar.foreground
+          tooltipText: "Forget the conversation and everything seen on screen"
+          onClicked: root.control("forget")
+        }
       }
       Flickable {
         id: remarksFlick
