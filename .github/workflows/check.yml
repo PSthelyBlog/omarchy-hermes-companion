@@ -15,6 +15,8 @@ jobs:
           python-version: "3.12"
       - name: Python compiles
         run: python -m py_compile daemon/*.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
       - name: JSON parses
         run: |
           python -m json.tool manifest.json > /dev/null

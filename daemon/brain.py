@@ -40,6 +40,27 @@ DESCRIBE_PROMPT = (
     "verbatim. No preamble, no markdown."
 )
 
+REDACTED = "[redacted secret]"
+# Backstop for the prompts' "never repeat a secret" rule, applied to everything the models write
+# before it reaches the conversation, toasts, state.json, the journal or TTS. Screenshots are not altered.
+_SECRET_RE = re.compile(
+    r"\b(?:sk-(?:ant-)?[\w-]{16,}|gh[pousr]_\w{20,}|github_pat_\w{20,}|xox[abpr]-[\w-]{10,}"
+    r"|AKIA[0-9A-Z]{16}|AIza[\w-]{30,}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\s*[A-Za-z0-9+/=]{40,})*(?:\s*-----END [A-Z ]*PRIVATE KEY-----)?"
+)
+# `NAME=value` / `name: value` (.env, YAML, JSON, URLs) whose name *ends* in key/token/password…,
+# so `KeyError: …` and `MAX_TOKENS=…` are left alone. The name is kept, the value is masked.
+_ASSIGNED_SECRET_RE = re.compile(
+    r"(\b[\w-]*(?:key|secret|token|password|passwd|pwd|pass)[\"'`]?\s*[=:]\s*[\"'`]?)"
+    r"(?!\[redacted)[^\s\"'`,;]{6,}",
+    re.I,
+)
+
+
+def _redact(text: str) -> str:
+    text = _ASSIGNED_SECRET_RE.sub(lambda m: m.group(1) + REDACTED, text)
+    return _SECRET_RE.sub(REDACTED, text)
+
 # Neutral default, used when companion.json sets no "user_context".
 _DEFAULT_USER_CONTEXT = "{{USER}} is a developer."
 
@@ -182,7 +203,8 @@ class CompanionAgent:
         """Stateless one-shot on the vision model."""
         parts = [{"type": "text", "text": "Describe this screenshot."}, {"type": "image_url", "image_url": {"url": image_data_url}}]
         result = self.eyes.run_conversation(parts, system_message=DESCRIBE_PROMPT, conversation_history=[])
-        return (result.get("final_response") or "").strip()
+        # Redacted before it enters the reasoning conversation, where it would be re-sent every turn.
+        return _redact((result.get("final_response") or "").strip())
 
     # ------------------------------------------------------------------ API
     def observe(self, text: str, image_data_url: Optional[str]) -> dict:
@@ -201,10 +223,11 @@ class CompanionAgent:
         raw = self._turn(content)
         data = _extract_json(raw) or {}
         return {
-            "observation": str(data.get("observation", ""))[:500],
+            # Redact before truncating, so a key cut at the limit is still recognised.
+            "observation": _redact(str(data.get("observation", "")))[:500],
             "should_speak": bool(data.get("should_speak", False)),
             "urgency": str(data.get("urgency", "low")),
-            "text": str(data.get("text", "")).strip(),
+            "text": _redact(str(data.get("text", "")).strip()),
         }
 
     def ask(self, transcript: str, source: str = "voice") -> str:
@@ -215,4 +238,4 @@ class CompanionAgent:
             f"Reply in plain spoken prose (no JSON, no markdown, no lists), 1-4 sentences unless "
             f"more is truly needed. {self.language_rule}"
         )
-        return self._turn(msg, agent=self.actor if self.actions else None)
+        return _redact(self._turn(msg, agent=self.actor if self.actions else None))
