@@ -93,16 +93,16 @@ else yellow "! No model provider credentials yet. The companion will start idle;
 # (or tampered) release cannot silently execute inside the persistent Hermes environment.
 # A failure here is a supply-chain signal: abort instead of continuing with unverified code.
 #
-# --no-config keeps this install hermetic: run from $HERMES_DIR, uv would otherwise inherit
-# [tool.uv] from Hermes's own pyproject.toml, whose override-dependencies (e.g. Pillow==13.0.0,
-# held there for the 13.0.0 security advisory set) replace requirements in this hash-locked
-# set with versions that have no trusted hash here, and the guard aborts by design.
-# Relatedly, pillow is deliberately NOT in this lock: Hermes core provides and governs PIL
-# (pinned via its own dependency set plus those security overrides), and a plugin must never
-# hash-pin a downgrade against them. The import check below still verifies PIL is present.
+# uv runs from $HERMES_DIR on purpose, so it inherits [tool.uv] from Hermes's pyproject.toml.
+# If Hermes force-pins (override-dependencies) a package this lock also pins, the forced version
+# has no trusted hash here and the install aborts. That is the intended fail-closed outcome: with
+# --no-config, uv would instead silently install this lock's version over Hermes's security pin.
+# pillow is deliberately NOT in this lock: Hermes core provides and pins it (Pillow==13.0.0 for
+# its 13.0.0 security advisory set), and a plugin must not hash-pin a different version against
+# that. The import check below still verifies PIL is present.
 echo "==> Python deps (into Hermes venv, hash-verified from requirements.lock)"
 ( cd "$HERMES_DIR" && source venv/bin/activate \
-  && uv pip install -q --no-config --require-hashes -r "$PLUGIN_DIR/requirements.lock" ) \
+  && uv pip install -q --require-hashes -r "$PLUGIN_DIR/requirements.lock" ) \
   || die "dependency install failed — hash-verified install refused (see requirements.lock)"
 if (cd "$HERMES_DIR" && "$PY" -c 'import faster_whisper, sounddevice, PIL' 2>/dev/null); then green "✓ Local speech-to-text ready"
 else yellow "! faster-whisper/sounddevice/pillow not importable — voice requests disabled until fixed"; fi

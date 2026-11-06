@@ -29,14 +29,15 @@ Re-run it anytime: `~/.config/omarchy/plugins/hermes.companion/install.sh`. Upda
 ~/.config/omarchy/plugins/hermes.companion/uninstall.sh   # stops/disables the daemon, removes unit + keybinds
 omarchy plugin remove hermes.companion                    # removes the plugin checkout
 ```
-Python packages added to the Hermes venv (`pillow`, `faster-whisper`, `sounddevice`) are left in place; remove with
+Python packages added to the Hermes venv (`faster-whisper`, `sounddevice`) are left in place; remove with
 `uv pip uninstall` inside `~/.hermes/hermes-agent` if unwanted. Runtime state lives in `~/.local/state/hermes-companion/`.
 
 ## External dependencies
 | Dependency | Why | Installed by |
 |---|---|---|
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) ≥ 0.21 (MIT) | model calls, STT/TTS pipeline, provider credentials | user / `omarchy install ai hermes` |
-| `pillow`, `faster-whisper`, `sounddevice` (PyPI) | screenshot scaling, local speech-to-text, mic capture | `install.sh` → hash-verified `uv pip install --require-hashes -r requirements.lock` into the Hermes venv |
+| `faster-whisper`, `sounddevice` (PyPI) | local speech-to-text, mic capture | `install.sh` → hash-verified `uv pip install --require-hashes -r requirements.lock` into the Hermes venv |
+| `pillow` (PyPI) | screenshot scaling | Hermes (core dependency, pinned by Hermes; deliberately not in `requirements.lock`) |
 | `grim`, `hyprctl`, `notify-send`, PipeWire (`pw-record`, `pactl`, `wpctl`) | screenshots, window info, notifications, audio | Omarchy base; `install.sh` offers `omarchy pkg add` if missing |
 | Edge TTS (via Hermes, network) | default voice output | Hermes |
 | Model provider APIs (Anthropic, Nous Portal, …) | screen ticks and answers are sent to the selected provider | user credentials via `hermes auth` |
@@ -49,10 +50,11 @@ besides its state/config files. No `sudo` or `pkexec` is required.
 accepted artifact. `install.sh` installs it with `uv pip install --require-hashes`, so a newly published or tampered
 release cannot be pulled into the persistent Hermes environment; a hash mismatch aborts the install rather than
 falling back to an unverified one. The cutoff matches the Hermes venv's own `exclude-newer` quarantine, so the lock
-resolves inside it. To refresh the lock after a dependency bump:
+resolves inside it. To refresh the lock after a dependency bump (leave `pillow` out: Hermes core pins it, and a
+second pin here collides with Hermes's override and makes the install abort):
 
 ```bash
-printf 'pillow\nfaster-whisper\nsounddevice\n' |
+printf 'faster-whisper\nsounddevice\n' |
   uv pip compile --generate-hashes --universal --python-version 3.11 \
     --exclude-newer "$(date -u -d '-15 days' +%Y-%m-%d)" -o requirements.lock -
 ```
