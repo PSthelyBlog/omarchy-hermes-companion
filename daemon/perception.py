@@ -31,7 +31,8 @@ SENSITIVE_TITLE_RE = re.compile(
 )
 # Layer-shell namespaces of shell overlays that put private content on screen. They are not
 # clients, so SENSITIVE_CLASS_RE never sees them and their text can't be read; a frame is
-# skipped while one is up. Each is mapped only while open.
+# skipped while one is up. Each is mapped only while open, except the notification canvas: see
+# notification_cards_on().
 PRIVATE_LAYERS = {
     "omarchy-notifications": "notification popup",  # OTP codes, message previews
     "omarchy-clipboard": "clipboard history",
@@ -128,6 +129,21 @@ def on_screen(mon: dict, clients: list[dict]) -> list[WindowInfo]:
     return out
 
 
+def notification_cards_on(display: str) -> bool:
+    """Whether Omarchy's notification deck shows cards on `display`.
+
+    Since Omarchy 4.5 the notification canvas stays mapped while idle (remapping it disturbs focus
+    and scrolling layouts), so a mapped layer no longer means a card is up. The shell's own probe
+    says what it draws: the deck shows its cards (`toasts`) on the displays it lists. Fails closed:
+    a shell without the probe (older Omarchy, whose canvas is mapped only while a card is up) or
+    one that can't answer counts as showing a card."""
+    try:
+        probe = json.loads(_run(["omarchy-shell", "notifications", "probe"], timeout=2))
+        return probe["toasts"] > 0 and display in probe["notificationDisplays"]
+    except Exception:
+        return True
+
+
 def screen_blocker(mon: dict) -> str:
     """Why the focused monitor must not be captured right now ("" = fine to capture).
 
@@ -137,14 +153,16 @@ def screen_blocker(mon: dict) -> str:
         layers = json.loads(_run(["hyprctl", "layers", "-j"]))
         visible = on_screen(mon, clients)
         levels = (layers.get(mon["name"]) or {}).get("levels") or {}
-        private = [PRIVATE_LAYERS[l.get("namespace")] for ls in levels.values() for l in ls
-                   if l.get("namespace") in PRIVATE_LAYERS]
+        mapped = {l.get("namespace") for ls in levels.values() for l in ls} & PRIVATE_LAYERS.keys()
     except Exception:
         return "window check failed"
     for w in visible:
         if w.sensitive:
             return f"private window: {w.cls}"
-    return private[0] if private else ""
+    if "omarchy-notifications" in mapped and not notification_cards_on(mon["name"]):
+        mapped.discard("omarchy-notifications")
+    # In PRIVATE_LAYERS order, so the reason given doesn't depend on set ordering.
+    return next((label for ns, label in PRIVATE_LAYERS.items() if ns in mapped), "")
 
 
 def lock_blocker() -> str:
