@@ -12,16 +12,17 @@ language you use and can be told who you are (`user_context`) — see *Configura
 
 ## Requirements
 - Omarchy 4.x (`omarchy`, `omarchy-shell`, `grim`, `hyprctl`, `notify-send`, PipeWire tools) — `install.sh` offers `omarchy pkg add` for missing packages.
-- Hermes Agent ≥ 0.21 at `~/.hermes/hermes-agent` (or `HERMES_AGENT_DIR`) — `install.sh` offers `omarchy install ai hermes` / `omarchy install hermes cli` if absent.
+- Hermes Agent ≥ 0.21.7 at `~/.hermes/hermes-agent` (or `HERMES_AGENT_DIR`) — `install.sh` offers `omarchy install ai hermes` / `omarchy install hermes cli` if absent.
+  Omarchy's Hermes package installs an older release first: run `hermes update` once before installing the companion.
 - At least one model provider credential (`hermes auth add …` or a Claude Code login). Not required to install; pick a vision model in the widget afterwards.
-- Local speech-to-text (`faster-whisper`, installed by `install.sh`) for voice requests.
+- Local speech-to-text (`faster-whisper`, from Hermes's `voice` extra, which `install.sh` asks Hermes to install) for voice requests.
 
 ## Install
 ```bash
 omarchy plugin add https://github.com/PSthelyBlog/omarchy-hermes-companion.git --enable
 ```
 Enabling the plugin opens the installer in a floating terminal the first time (checks Omarchy tooling and Hermes,
-installs Python deps into Hermes' venv, writes the systemd --user unit and Hyprland keybinds, starts the daemon).
+has Hermes install its `voice` extra, writes the systemd --user unit and Hyprland keybinds, starts the daemon).
 Re-run it anytime: `~/.config/omarchy/plugins/hermes.companion/install.sh`. Update with `omarchy plugin update hermes.companion`.
 
 ## Uninstall
@@ -29,15 +30,16 @@ Re-run it anytime: `~/.config/omarchy/plugins/hermes.companion/install.sh`. Upda
 ~/.config/omarchy/plugins/hermes.companion/uninstall.sh   # stops/disables the daemon, removes unit + keybinds
 omarchy plugin remove hermes.companion                    # removes the plugin checkout
 ```
-Python packages added to the Hermes venv (`faster-whisper`, `sounddevice`) are left in place; remove with
-`uv pip uninstall` inside `~/.hermes/hermes-agent` if unwanted. Runtime state lives in `~/.local/state/hermes-companion/`.
+Hermes's `voice` extra is left installed, since Hermes's own voice mode uses it too; remove it with
+`hermes pm install --without voice` if unwanted. Runtime state lives in `~/.local/state/hermes-companion/`.
 
 ## External dependencies
 | Dependency | Why | Installed by |
 |---|---|---|
-| [Hermes Agent](https://github.com/NousResearch/hermes-agent) ≥ 0.21 (MIT) | model calls, STT/TTS pipeline, provider credentials | user / `omarchy install ai hermes` |
-| `faster-whisper`, `sounddevice` (PyPI) | local speech-to-text, mic capture | `install.sh` → hash-verified `uv pip install --require-hashes -r requirements.lock` into the Hermes venv |
-| `pillow` (PyPI) | screenshot scaling | Hermes (core dependency, pinned by Hermes; deliberately not in `requirements.lock`) |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) ≥ 0.21.7 (MIT) | model calls, STT/TTS pipeline, provider credentials | user / `omarchy install ai hermes`, then `hermes update` |
+| `faster-whisper`, `sounddevice` (PyPI) | local speech-to-text, mic capture | Hermes's `voice` extra: `install.sh` runs `hermes pm install --extra voice` |
+| `pillow` (PyPI) | screenshot scaling | Hermes (core dependency) |
+| Python 3 (`/usr/bin/python3`) | starts the daemon and `--ctl` commands | Omarchy base |
 | `grim`, `hyprctl`, `notify-send`, PipeWire (`pw-record`, `pactl`, `wpctl`) | screenshots, window info, notifications, audio | Omarchy base; `install.sh` offers `omarchy pkg add` if missing |
 | Edge TTS (via Hermes, network) | default voice output | Hermes |
 | Model provider APIs (Anthropic, Nous Portal, …) | screen ticks and answers are sent to the selected provider | user credentials via `hermes auth` |
@@ -45,19 +47,18 @@ Python packages added to the Hermes venv (`faster-whisper`, `sounddevice`) are l
 Screenshots are held in memory only and sent to the selected vision model; nothing is written to disk by the plugin
 besides its state/config files. No `sudo` or `pkexec` is required.
 
-### Pinned Python dependencies
-`requirements.lock` pins every direct **and** transitive package to an exact version with sha256 hashes for each
-accepted artifact. `install.sh` installs it with `uv pip install --require-hashes`, so a newly published or tampered
-release cannot be pulled into the persistent Hermes environment; a hash mismatch aborts the install rather than
-falling back to an unverified one. The cutoff matches the Hermes venv's own `exclude-newer` quarantine, so the lock
-resolves inside it. To refresh the lock after a dependency bump (leave `pillow` out: Hermes core pins it, and a
-second pin here collides with Hermes's override and makes the install abort):
+### Python dependencies
+The plugin installs no Python packages itself. Since 0.21.7, Hermes's package manager builds the environment
+Hermes runs from (under `~/.hermes/installs/`) from Hermes's own locked `uv.lock`, and rebuilds it on updates.
+Anything installed beside it would vanish at the next update, and a separate lock could only ever match one
+Hermes release. So `install.sh` asks Hermes for its `voice` extra (`hermes pm install --extra voice`): Hermes
+installs `faster-whisper` and `sounddevice` at the versions it ships with the rest of its packages, and keeps them
+through every `hermes update`.
 
-```bash
-printf 'faster-whisper\nsounddevice\n' |
-  uv pip compile --generate-hashes --universal --python-version 3.11 \
-    --exclude-newer "$(date -u -d '-15 days' +%Y-%m-%d)" -o requirements.lock -
-```
+The daemon starts on `/usr/bin/python3` and imports Hermes's bootstrap before any third-party package. The
+bootstrap re-executes it on the Python Hermes manages and leases the environment Hermes committed, the same way
+Hermes starts its own services, so an update never removes that environment while the daemon runs. `--ctl`
+commands use only the standard library and stay on the system Python.
 
 ## Actions (off by default)
 
@@ -102,7 +103,7 @@ screen history.
 - `daemon/state.py`      `~/.local/state/hermes-companion/state.json` + `$XDG_RUNTIME_DIR/hermes-companion.sock`
 - `BarWidget.qml`        bar eye icon + panel (toggles, model pickers, text input, recent replies)   `Service.qml` starts the unit, renders toasts
 - `companion.json`       see *Configuration*
-- `hermes-companion.service.in` template → `~/.config/systemd/user/hermes-companion.service` (install.sh fills in the Hermes path)
+- `hermes-companion.service.in` template → `~/.config/systemd/user/hermes-companion.service` (install.sh fills in the Hermes and plugin paths)
 
 ## Configuration
 `~/.config/omarchy/plugins/hermes.companion/companion.json` (start from `companion.example.json`; the panel and `--ctl set-*` write to it too).
@@ -126,7 +127,7 @@ screen history.
 
 ## Commands
 ```
-CTL="$HOME/.hermes/hermes-agent/venv/bin/python $HOME/.config/omarchy/plugins/hermes.companion/daemon/companion.py --ctl"
+CTL="/usr/bin/python3 $HOME/.config/omarchy/plugins/hermes.companion/daemon/companion.py --ctl"
 $CTL status | toggle-eyes | listen | toggle-mute | toggle-toasts | toggle-actions | decide <yes|no> | hush | tick | forget | models | set-vision <provider:model> | set-reasoning <provider:model|same> | set-{vision,reasoning}-effort <low|medium|high> | toggle-{vision,reasoning}-thinking | set-language <auto|language name> | set-user-context <text|(empty)> | set-toast-position <anchor>[,<margin_x>[,<margin_y>]] | say <text> | ask <text> | toast <text> | quit
 # ask / text: same as speaking to it (reply is toasted + spoken); text is what the panel's input box sends
 # forget: drop the conversation and everything seen so far (panel: Forget); a turn in flight is discarded

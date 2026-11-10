@@ -4,7 +4,10 @@ set -uo pipefail
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ID="$(basename "$PLUGIN_DIR")"
 UNIT_DIR="$HOME/.config/systemd/user"
-HERMES_MIN="0.21.0"
+HERMES_MIN="0.21.7"
+# The daemon and every `--ctl` command start on the system Python. `--ctl` needs only the standard
+# library; the daemon imports Hermes's bootstrap, which moves it onto Hermes's own environment.
+SYS_PY=/usr/bin/python3
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -40,7 +43,7 @@ green "✓ Omarchy tooling present"
 # ---------------------------------------------------------------- 2. Hermes installed
 echo "==> Checking Hermes Agent"
 HERMES_DIR="${HERMES_AGENT_DIR:-$HOME/.hermes/hermes-agent}"
-hermes_ok() { [[ -f "$HERMES_DIR/run_agent.py" && -x "$HERMES_DIR/venv/bin/python" ]]; }
+hermes_ok() { [[ -f "$HERMES_DIR/run_agent.py" ]]; }
 if ! hermes_ok; then
   yellow "Hermes Agent not found at $HERMES_DIR"
   echo "The companion runs inside Hermes' Python environment. Omarchy can install it:"
@@ -55,25 +58,41 @@ if ! hermes_ok; then
   esac
   hermes_ok || die "Hermes still not found at $HERMES_DIR. Run 'hermes' once to finish its setup, then re-run this installer."
 fi
-PY="$HERMES_DIR/venv/bin/python"
+[[ -x "$SYS_PY" ]] || die "$SYS_PY not found — install it with 'omarchy pkg add python', then re-run this installer."
+
+# Since 0.21.7 Hermes runs from environments its package manager (PM) builds under
+# ~/.hermes/installs/, and rebuilds them from its own uv.lock on updates. Older releases, including
+# the 2026.9.x one Omarchy's hermes-desktop package installs, keep a venv inside the checkout and
+# have no PM. The companion asks PM for its voice dependencies, so it needs a PM-era Hermes.
+[[ -f "$HERMES_DIR/pm/environments.py" ]] \
+  || die "Hermes at $HERMES_DIR predates its package manager. Run 'hermes update', then re-run this installer."
+
+# The checkout's own launcher runs Hermes on the Python that PM manages. Checkouts without one
+# (developer checkouts) run their `hermes` script, whose bootstrap selects the environment.
+if [[ -x "$HERMES_DIR/.hermes/bin/hermes" ]]; then HERMES=("$HERMES_DIR/.hermes/bin/hermes")
+else HERMES=("$SYS_PY" "$HERMES_DIR/hermes"); fi
+
+# Run Python code inside Hermes's environment exactly as the daemon does: import hermes_bootstrap
+# first. It selects and leases the dependency environment PM committed, re-executing into Hermes's
+# own Python when this one is not it, so the checks below test what the daemon will really load.
+hermes_py() { (cd "$HERMES_DIR" && "$SYS_PY" -c $'import hermes_bootstrap\n'"$1"); }
 
 # ---------------------------------------------------------------- 3. version + import smoke test
-ver="$(cd "$HERMES_DIR" && "$PY" hermes --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 | tr -d v)"
+ver="$("${HERMES[@]}" --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 | tr -d v)"
 [[ -n "$ver" ]] || ver="0.0.0"
 if [[ "$(printf '%s\n%s\n' "$HERMES_MIN" "$ver" | sort -V | head -1)" != "$HERMES_MIN" ]]; then
   die "Hermes $ver found, but >= $HERMES_MIN is required. Run 'hermes update'."
 fi
 green "✓ Hermes $ver at $HERMES_DIR"
 
-if ! err="$(cd "$HERMES_DIR" && "$PY" -c 'import run_agent, hermes_cli.voice, tools.tts_tool, tools.transcription_tools, agent.models_dev, hermes_cli.models' 2>&1 >/dev/null)"; then
+if ! err="$(hermes_py 'import run_agent, hermes_cli.voice, tools.tts_tool, tools.transcription_tools, agent.models_dev, hermes_cli.models' 2>&1 >/dev/null)"; then
   red "Hermes import check failed:"; echo "$err" | tail -3
   die "the Hermes install looks broken — try 'hermes update' or 'hermes doctor'"
 fi
 green "✓ Hermes modules import"
 
 # ---------------------------------------------------------------- 4. providers (informational)
-providers="$(cd "$HERMES_DIR" && "$PY" - <<'EOF' 2>/dev/null
-import sys; sys.path.insert(0, ".")
+providers="$(hermes_py '
 from hermes_cli.models import list_available_providers
 names = [p["id"] for p in list_available_providers() if p.get("authenticated")]
 try:
@@ -81,36 +100,26 @@ try:
     if resolve_anthropic_token() and "anthropic" not in names: names.append("anthropic")
 except Exception: pass
 print(" ".join(names))
-EOF
-)"
+' 2>/dev/null)"
 if [[ -n "$providers" ]]; then green "✓ Model providers with credentials: $providers"
 else yellow "! No model provider credentials yet. The companion will start idle; run 'hermes auth add <provider>' (or log in to Claude Code), then pick a vision model in the widget."; fi
 
-# ---------------------------------------------------------------- 5. python deps + STT
-# Installed from requirements.lock: every direct and transitive package is pinned to an exact
-# version with sha256 hashes for each accepted artifact. --require-hashes makes uv refuse any
-# package that is unpinned, unhashed or whose artifact does not match, so a newly published
-# (or tampered) release cannot silently execute inside the persistent Hermes environment.
-# A failure here is a supply-chain signal: abort instead of continuing with unverified code.
-#
-# uv runs from $HERMES_DIR on purpose, so it inherits [tool.uv] from Hermes's pyproject.toml.
-# If Hermes force-pins (override-dependencies) a package this lock also pins, the forced version
-# has no trusted hash here and the install aborts. That is the intended fail-closed outcome: with
-# --no-config, uv would instead silently install this lock's version over Hermes's security pin.
-# pillow is deliberately NOT in this lock: Hermes core provides and pins it (Pillow==13.0.0 for
-# its 13.0.0 security advisory set), and a plugin must not hash-pin a different version against
-# that. The import check below still verifies PIL is present.
-echo "==> Python deps (into Hermes venv, hash-verified from requirements.lock)"
-( cd "$HERMES_DIR" && source venv/bin/activate \
-  && uv pip install -q --require-hashes -r "$PLUGIN_DIR/requirements.lock" ) \
-  || die "dependency install failed — hash-verified install refused (see requirements.lock)"
-if (cd "$HERMES_DIR" && "$PY" -c 'import faster_whisper, sounddevice, PIL' 2>/dev/null); then green "✓ Local speech-to-text ready"
-else yellow "! faster-whisper/sounddevice/pillow not importable — voice requests disabled until fixed"; fi
+# ---------------------------------------------------------------- 5. voice dependencies + STT
+# faster-whisper and sounddevice come from Hermes's own `voice` extra. PM installs it from Hermes's
+# locked uv.lock, at the versions Hermes tested with the rest of its packages, and keeps it through
+# every `hermes update`. The plugin installs no Python packages of its own: PM rebuilds Hermes's
+# environment from that lock on updates, so anything installed beside it would vanish, and a lock
+# kept here could only ever match one Hermes release. Pillow is a Hermes core dependency.
+echo "==> Voice dependencies (Hermes 'voice' extra, installed by Hermes)"
+"${HERMES[@]}" pm install --extra voice \
+  || die "Hermes could not install its voice extra (see above). Fix that, or run 'hermes pm install --extra voice', then re-run this installer."
+if hermes_py 'import faster_whisper, sounddevice, PIL' 2>/dev/null; then green "✓ Local speech-to-text ready"
+else yellow "! faster-whisper/sounddevice/PIL not importable in Hermes's environment — voice requests disabled until fixed"; fi
 
 # ---------------------------------------------------------------- 6. install
 echo "==> Plugin config"
 [[ -f "$PLUGIN_DIR/companion.json" ]] || cp "$PLUGIN_DIR/companion.example.json" "$PLUGIN_DIR/companion.json"
-"$PY" - "$PLUGIN_DIR/companion.json" "$HERMES_DIR" <<'EOF'
+"$SYS_PY" - "$PLUGIN_DIR/companion.json" "$HERMES_DIR" <<'EOF'
 import json, sys
 p, hermes = sys.argv[1], sys.argv[2]
 d = json.load(open(p)); d["hermes_dir"] = hermes
@@ -126,7 +135,19 @@ systemctl --user enable hermes-companion.service >/dev/null 2>&1
 
 echo "==> Hyprland keybinds"
 BIND="$HOME/.config/hypr/bindings.lua"
-CTL="$PY $PLUGIN_DIR/daemon/companion.py --ctl"
+CTL="$SYS_PY $PLUGIN_DIR/daemon/companion.py --ctl"
+# Older installs bound the keys to the venv inside the Hermes checkout, which PM-era Hermes no
+# longer creates or updates. Point them at the system Python instead.
+OLD_CTL="$HERMES_DIR/venv/bin/python $PLUGIN_DIR/daemon/companion.py --ctl"
+if grep -qF "$OLD_CTL" "$BIND" 2>/dev/null; then
+  "$SYS_PY" - "$BIND" "$OLD_CTL" "$CTL" <<'EOF'
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+open(p, "w").write(s.replace(old, new))
+EOF
+  hyprctl reload >/dev/null 2>&1 || true
+fi
 if ! grep -q "hermes-companion" "$BIND" 2>/dev/null; then
   cat >> "$BIND" <<EOF
 

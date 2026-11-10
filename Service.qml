@@ -22,7 +22,9 @@ Item {
   property string hermesDir: home + "/.hermes/hermes-agent"
   Process { id: svc }
   Process { id: decide }
-  readonly property string pythonBin: root.hermesDir + "/venv/bin/python"
+  // `--ctl` commands need only the standard library (the daemon itself moves onto Hermes's
+  // environment through Hermes's bootstrap), so they run on the system Python.
+  readonly property string pythonBin: "/usr/bin/python3"
   function sendDecision(approve) {
     decide.command = [root.pythonBin, root.pluginDir + "/daemon/companion.py", "--ctl", "decide " + (approve ? "yes" : "no")]
     decide.running = true
@@ -59,7 +61,7 @@ Item {
   property alias installLaunched: persisted.installLaunched
   FileView {
     id: probe
-    path: root.hermesDir + "/venv/bin/python"
+    path: root.hermesDir + "/run_agent.py"
     printErrors: false
     onLoaded: { svc.command = ["systemctl", "--user", "start", "hermes-companion.service"]; svc.running = true }
     onLoadFailed: console.warn("hermes-companion: Hermes not found at", root.hermesDir, "- not starting daemon")

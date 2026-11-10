@@ -13,7 +13,8 @@ BarWidget {
   readonly property string pluginDir: home + "/.config/omarchy/plugins/hermes.companion"
   readonly property string daemon: pluginDir + "/daemon/companion.py"
   property string hermesDir: home + "/.hermes/hermes-agent"
-  readonly property string python: hermesDir + "/venv/bin/python"
+  // `--ctl` commands need only the standard library, so they run on the system Python.
+  readonly property string python: "/usr/bin/python3"
   property bool hermesMissing: false
   FileView {
     path: root.pluginDir + "/companion.json"
@@ -24,7 +25,7 @@ BarWidget {
   }
   FileView {
     id: hermesProbe
-    path: root.python
+    path: root.hermesDir + "/run_agent.py"
     printErrors: false
     onLoaded: root.hermesMissing = false
     onLoadFailed: root.hermesMissing = true

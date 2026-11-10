@@ -10,7 +10,16 @@ Type=simple
 WorkingDirectory=@HERMES_DIR@
 Environment=PYTHONUNBUFFERED=1
 Environment=HERMES_AGENT_DIR=@HERMES_DIR@
-ExecStart=@HERMES_DIR@/venv/bin/python @PLUGIN_DIR@/daemon/companion.py
+# Started on the system Python on purpose. The daemon imports Hermes's bootstrap, which re-executes
+# it on the Python Hermes manages and leases the dependency environment Hermes committed, so an
+# update never pulls that environment out from under a running daemon. Both change on Hermes
+# updates, so neither is written here.
+# HERMES_SUPERVISED_CHILD is the marker Hermes puts in its own systemd units: a restart after a
+# half-finished update leaves finishing it to `hermes update` instead of redoing it on every start.
+Environment=HERMES_SUPERVISED_CHILD=1
+# -u, not just PYTHONUNBUFFERED: the re-exec runs Python isolated (-I), which drops PYTHON* variables
+# but keeps interpreter flags.
+ExecStart=/usr/bin/python3 -u @PLUGIN_DIR@/daemon/companion.py
 Restart=on-failure
 RestartSec=5
 MemoryMax=6G

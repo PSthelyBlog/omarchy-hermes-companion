@@ -25,7 +25,12 @@ try:
     from perception import Perceiver, screen_shared  # noqa: E402
     from policy import PolicyConfig, SpeechPolicy  # noqa: E402
     if "--ctl" not in sys.argv:
-        import run_agent  # noqa: E402,F401  (real Hermes probe; brain imports it lazily)
+        # Real Hermes probe, and the daemon's way into Hermes's environment: run_agent imports
+        # hermes_bootstrap first, which selects and leases the dependency environment Hermes
+        # committed and re-executes this process on Hermes's own Python when it is not already
+        # running there (the unit starts it on the system Python). Everything imported above is
+        # standard library only; keep third-party imports below this line.
+        import run_agent  # noqa: E402,F401  (brain imports it lazily)
 except Exception as _e:  # Hermes missing/broken: record it for the widget and exit (no restart loop)
     if "--ctl" not in sys.argv:
         State().update(status="error", last_error=f"Hermes runtime unavailable: {_e}")
