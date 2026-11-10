@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -143,6 +144,34 @@ class ApprovalBinding(unittest.TestCase):
         self.assertTrue(actions.decide("0123456789abcdef yes", h.pending).startswith("stale"))
         self.assertTrue(actions.decide(f"{request} yes", None).startswith("stale"))
         self.assertEqual(result(), "deny")
+
+
+class TierFourAsksAPerson(unittest.TestCase):
+    """pre_tool_call defers a tier-4 command to Hermes's own gate only when that gate will ask a
+    person (Hermes flags it and approvals.mode is manual); otherwise it escalates to the plugin
+    gate, which always asks. In smart mode Hermes's gate may let a guardian model approve."""
+
+    def hook(self, hermes_flags: bool, mode: str):
+        detection = types.ModuleType("tools.approval_detection")
+        detection.detect_dangerous_command = lambda command: (hermes_flags, "flagged", "flagged")
+        tools = types.ModuleType("tools")
+        tools.approval_detection = detection
+        with mock.patch.dict(sys.modules, {"tools": tools, "tools.approval_detection": detection}), \
+                mock.patch.object(actions, "classify", lambda command: (4, "dotfile")), \
+                mock.patch.object(actions, "_hermes_approval_mode", lambda: mode):
+            return actions.pre_tool_call("terminal", {"command": "cp /etc/hostname ~/.x"})
+
+    def test_escalates_unless_hermes_will_ask(self):
+        for flags in (True, False):
+            for mode in ("smart", "manual", "off", ""):
+                with self.subTest(hermes_flags=flags, mode=mode):
+                    directive = self.hook(flags, mode)
+                    if flags and mode == "manual":
+                        self.assertIsNone(directive)   # Hermes's gate asks the Approver itself
+                    else:
+                        self.assertEqual(directive["action"], "approve")
+                        self.assertEqual(directive["rule_key"], "companion")
+                        self.assertIn("cp /etc/hostname ~/.x", directive["message"])
 
 
 if __name__ == "__main__":

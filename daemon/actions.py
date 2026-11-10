@@ -219,6 +219,16 @@ def parse_yes_no(text: str) -> Optional[bool]:
 FILE_TOOLS = {"write_file", "patch", "read_file"}
 
 
+def _hermes_approval_mode() -> str:
+    """Hermes's `approvals.mode` (manual / smart / off), "" if this Hermes can't say: then the hook
+    escalates, which at worst asks twice."""
+    try:
+        from tools.approval_context import _get_approval_mode
+        return str(_get_approval_mode())
+    except Exception:
+        return ""
+
+
 def pre_tool_call(tool_name: str = "", args: Optional[dict] = None, **_) -> Optional[dict]:
     """Hermes ``pre_tool_call`` hook (in-process, applies to the companion and its children).
     - terminal: tier 5 → block; tier 4 → escalate to the approval gate (which calls Approver).
@@ -232,12 +242,15 @@ def pre_tool_call(tool_name: str = "", args: Optional[dict] = None, **_) -> Opti
             audit({"kind": "refused", "command": cmd, "reason": reason})
             return {"action": "block", "message": f"Refused by Hermes Companion policy ({reason}). Tell the user instead."}
         if tier == 4:
-            # Hermes' own dangerous-pattern gate already reaches the Approver with the real
-            # command text; only escalate the companion-specific tier-4 cases it doesn't know.
+            # Tier 4 asks a person. Hermes's plugin-approval gate (this "approve" escalation) always
+            # does. Its own dangerous-command gate does only in `manual` mode: in `smart` mode, the
+            # default, a guardian model may approve the command instead. So defer to Hermes's gate
+            # only for commands it flags itself and only in manual mode, which also avoids asking
+            # twice; anything else is escalated here.
             from tools.approval_detection import detect_dangerous_command
-            if not detect_dangerous_command(cmd)[0]:
-                return {"action": "approve", "message": f"{reason}: {cmd}", "rule_key": "companion"}
-            return None
+            if detect_dangerous_command(cmd)[0] and _hermes_approval_mode() == "manual":
+                return None
+            return {"action": "approve", "message": f"{reason}: {cmd}", "rule_key": "companion"}
         audit({"kind": "run", "command": cmd})
         return None
     if tool_name in FILE_TOOLS:
