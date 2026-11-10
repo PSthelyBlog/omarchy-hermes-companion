@@ -78,12 +78,15 @@ else HERMES=("$SYS_PY" "$HERMES_DIR/hermes"); fi
 hermes_py() { (cd "$HERMES_DIR" && "$SYS_PY" -c $'import hermes_bootstrap\n'"$1"); }
 
 # ---------------------------------------------------------------- 3. version + import smoke test
-ver="$("${HERMES[@]}" --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 | tr -d v)"
-[[ -n "$ver" ]] || ver="0.0.0"
-if [[ "$(printf '%s\n%s\n' "$HERMES_MIN" "$ver" | sort -V | head -1)" != "$HERMES_MIN" ]]; then
+# `hermes --version` prints "Hermes Agent vX.Y.Z (<release date>)", or "vgit.<sha> (<release date>)"
+# when the checkout cannot see its release tags (a shallow clone, a tag fetch that timed out). Only
+# the vX.Y.Z form names a release, and the date must not pass for one. Without it the PM check above
+# is the version gate.
+ver="$("${HERMES[@]}" --version 2>/dev/null | grep -oE '^Hermes Agent v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | grep -oE '[0-9.]+$')"
+if [[ -n "$ver" && "$(printf '%s\n%s\n' "$HERMES_MIN" "$ver" | sort -V | head -1)" != "$HERMES_MIN" ]]; then
   die "Hermes $ver found, but >= $HERMES_MIN is required. Run 'hermes update'."
 fi
-green "✓ Hermes $ver at $HERMES_DIR"
+green "✓ Hermes ${ver:-(release unknown)} at $HERMES_DIR"
 
 if ! err="$(hermes_py 'import run_agent, hermes_cli.voice, tools.tts_tool, tools.transcription_tools, agent.models_dev, hermes_cli.models' 2>&1 >/dev/null)"; then
   red "Hermes import check failed:"; echo "$err" | tail -3
