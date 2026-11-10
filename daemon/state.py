@@ -35,6 +35,7 @@ class State:
             "last_error": "",
             "ticks": 0,
             "frames_sent": 0,
+            "approval": None,  # {id, command, expires} while an approval request waits
             "updated": time.time(),
             "pid": os.getpid(),
         }
@@ -54,10 +55,11 @@ class State:
             self.data["updated"] = time.time()
             self._write()
 
-    def toast(self, text: str, kind: str, note: str = ""):
-        """Publish one toast for the shell overlay (atomic write; shell watches the file)."""
+    def toast(self, text: str, kind: str, note: str = "", request: str = ""):
+        """Publish one toast for the shell overlay (atomic write; shell watches the file).
+        `request` is the approval request an approval toast's buttons answer."""
         tmp = TOAST_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"ts": time.time(), "text": text, "kind": kind, "note": note}))
+        tmp.write_text(json.dumps({"ts": time.time(), "text": text, "kind": kind, "note": note, "request": request}))
         os.replace(tmp, TOAST_FILE)
 
     def get(self, k, default=None):

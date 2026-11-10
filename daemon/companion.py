@@ -173,10 +173,11 @@ class Companion:
         from tools.terminal_tool import set_approval_callback
 
         self.approver = Approver(
-            toast=lambda text, kind, note: self.state.toast(text, kind, note),
+            toast=self.state.toast,
             speak=self.say,
             listen_yes_no=self._listen_yes_no,
             set_status=self.set_status,
+            publish=lambda pending: self.state.update(approval=pending),
         )
         set_approval_callback(self.approver)
         # Subagent worker threads normally get an auto-deny callback (delegation.subagent_auto_approve);
@@ -188,10 +189,10 @@ class Companion:
         install_hook()   # tier-5 block / tier-4 escalate for terminal + file tools
         os.environ["HERMES_INTERACTIVE"] = "1"   # tells Hermes' gate a human can answer
 
-    def _listen_yes_no(self, timeout: float):
+    def _listen_yes_no(self, timeout: float, settled: threading.Event):
         if not self.voice:
             return None
-        return self.voice.listen_for(timeout, parse_yes_no)
+        return self.voice.listen_for(timeout, parse_yes_no, cancel=settled)
 
     def set_actions(self, enabled: bool) -> str:
         self.cfg["actions"] = bool(enabled)
@@ -465,10 +466,8 @@ class Companion:
         if op == "set-user-context":
             return self.set_user_context(arg)
         if op == "decide" and arg:
-            from actions import DECISION_FILE
-            DECISION_FILE.parent.mkdir(parents=True, exist_ok=True)
-            DECISION_FILE.write_text(json.dumps({"approve": arg.lower() in ("yes", "run", "approve", "1", "true")}))
-            return "decided"
+            from actions import decide
+            return decide(arg, self.state.get("approval"))
         if op == "toggle-toasts":
             v = not self.state.get("toasts", True)
             self.state.update(toasts=v)
