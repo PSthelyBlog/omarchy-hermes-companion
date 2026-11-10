@@ -27,4 +27,5 @@ rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/hermes-companion.sock"
 rm -f "$PLUGIN_DIR/.installed"
 
 echo "Done. Delete the plugin with: omarchy plugin remove hermes.companion"
-echo "Kept: companion.json (your settings) and the Python packages in the Hermes venv."
+echo "Kept: companion.json (your settings) and Hermes's 'voice' extra, which Hermes's own voice mode"
+echo "also uses (remove it with: hermes pm install --without voice)."
