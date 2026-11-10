@@ -92,6 +92,14 @@ else yellow "! No model provider credentials yet. The companion will start idle;
 # package that is unpinned, unhashed or whose artifact does not match, so a newly published
 # (or tampered) release cannot silently execute inside the persistent Hermes environment.
 # A failure here is a supply-chain signal: abort instead of continuing with unverified code.
+#
+# uv runs from $HERMES_DIR on purpose, so it inherits [tool.uv] from Hermes's pyproject.toml.
+# If Hermes force-pins (override-dependencies) a package this lock also pins, the forced version
+# has no trusted hash here and the install aborts. That is the intended fail-closed outcome: with
+# --no-config, uv would instead silently install this lock's version over Hermes's security pin.
+# pillow is deliberately NOT in this lock: Hermes core provides and pins it (Pillow==13.0.0 for
+# its 13.0.0 security advisory set), and a plugin must not hash-pin a different version against
+# that. The import check below still verifies PIL is present.
 echo "==> Python deps (into Hermes venv, hash-verified from requirements.lock)"
 ( cd "$HERMES_DIR" && source venv/bin/activate \
   && uv pip install -q --require-hashes -r "$PLUGIN_DIR/requirements.lock" ) \
