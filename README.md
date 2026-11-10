@@ -23,7 +23,9 @@ omarchy plugin add https://github.com/PSthelyBlog/omarchy-hermes-companion.git -
 ```
 Enabling the plugin opens the installer in a floating terminal the first time (checks Omarchy tooling and Hermes,
 has Hermes install its `voice` extra, writes the systemd --user unit and Hyprland keybinds, starts the daemon).
-Re-run it anytime: `~/.config/omarchy/plugins/hermes.companion/install.sh`. Update with `omarchy plugin update hermes.companion`.
+Re-run it anytime: `~/.config/omarchy/plugins/hermes.companion/install.sh`. Update with `omarchy plugin update hermes.companion`,
+then `omarchy restart shell`: the shell keeps the plugin's always-loaded service (toasts, approval cards) from when it
+started, so a new version of it only loads after a shell restart or a new login.
 
 ## Uninstall
 ```bash
