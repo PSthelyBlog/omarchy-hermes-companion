@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls as QQC
 import Quickshell
 import Quickshell.Io
 import qs.Ui
@@ -101,6 +102,37 @@ BarWidget {
     askField.text = ""
     askProc.command = [root.python, root.daemon, "--ctl", "text " + t]
     askProc.running = true
+  }
+  // A native paste reads the whole clipboard synchronously on the shell's thread, before any
+  // length limit applies, so a huge or never-ending clipboard offer would stall or bloat the
+  // long-lived shell. Every native paste path of the Ask field (paste keys, middle-click, the
+  // context menu) comes here instead: wl-paste runs in the background, capped at pasteMaxBytes
+  // and 2 s, one paste at a time, and the text lands only if the field is unchanged since.
+  readonly property int askMaxChars: 2000
+  readonly property int pasteMaxBytes: 4 * askMaxChars   // UTF-8: at most 4 bytes a character
+  property int askGeneration: 0
+  property int pasteGeneration: -1
+  function pasteBounded(primary) {
+    if (pasteProc.running || !askField.enabled) return
+    root.pasteGeneration = root.askGeneration
+    pasteProc.command = ["sh", "-c", "timeout 2 wl-paste --no-newline --type text" + (primary ? " --primary" : "")
+                         + " 2>/dev/null | head -c " + root.pasteMaxBytes]
+    pasteProc.running = true
+  }
+  function pasteLanded(raw) {
+    if (root.pasteGeneration !== root.askGeneration || !askField.enabled) return   // edited, sent or disabled since
+    // head -c can cut the last character in half; the field is a single line.
+    var t = String(raw || "").replace(/�+$/, "").replace(/[\r\n\t]+/g, " ")
+    var start = askField.selectionStart, end = askField.selectionEnd
+    t = t.slice(0, Math.max(0, root.askMaxChars - (askField.length - (end - start))))
+    if (t === "") return
+    if (end > start) askField.remove(start, end)
+    askField.insert(start, t)
+    askField.cursorPosition = start + t.length
+  }
+  Process {
+    id: pasteProc
+    stdout: StdioCollector { id: pasteOut; onStreamFinished: root.pasteLanded(pasteOut.text) }
   }
   Process { id: svc }
   function service(op) {
@@ -414,7 +446,26 @@ BarWidget {
           font.pixelSize: Style.font.body
           foreground: root.bar.foreground
           enabled: root.alive && !root.sending
+          maximumLength: root.askMaxChars
+          onTextChanged: root.askGeneration++
           onAccepted: root.sendText()
+          // Native paste paths, each sent through root.pasteBounded() (see there).
+          Keys.onPressed: (event) => {
+            if (event.matches(StandardKey.Paste) || event.key === Qt.Key_Paste) {
+              event.accepted = true
+              root.pasteBounded(false)
+            }
+          }
+          QQC.ContextMenu.menu: null   // Qt's default text menu has a native Paste
+          MouseArea {   // middle-click pastes the primary selection natively
+            anchors.fill: parent
+            acceptedButtons: Qt.MiddleButton
+            onPressed: (mouse) => {
+              askField.forceActiveFocus()
+              askField.cursorPosition = askField.positionAt(mouse.x, mouse.y)
+              root.pasteBounded(true)
+            }
+          }
         }
         Button {
           id: askBtn
