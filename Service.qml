@@ -25,10 +25,13 @@ Item {
   // `--ctl` commands need only the standard library (the daemon itself moves onto Hermes's
   // environment through Hermes's bootstrap), so they run on the system Python.
   readonly property string pythonBin: "/usr/bin/python3"
-  function sendDecision(approve) {
-    decide.command = [root.pythonBin, root.pluginDir + "/daemon/companion.py", "--ctl", "decide " + (approve ? "yes" : "no")]
+  // An approval card answers only the request it was shown for (the daemon refuses any other).
+  function sendDecision(request, approve) {
+    decide.command = [root.pythonBin, root.pluginDir + "/daemon/companion.py", "--ctl", "decide " + request + " " + (approve ? "yes" : "no")]
     decide.running = true
   }
+  // The approval request waiting now (state.json `approval.id`), "" when none.
+  property string pendingApproval: ""
   FileView {
     path: root.pluginDir + "/companion.json"
     printErrors: false
@@ -88,6 +91,7 @@ Item {
       try {
         var s = JSON.parse(String(text() || ""))
         root.toastsEnabled = s.toasts !== false
+        root.pendingApproval = s.approval && typeof s.approval.id === "string" ? s.approval.id : ""
         var tp = s.toast_position
         if (tp) {
           if (typeof tp.anchor === "string") root.toastAnchor = tp.anchor
@@ -127,7 +131,8 @@ Item {
     if (!t || !t.ts || t.ts <= root.lastToastTs) return
     root.lastToastTs = t.ts
     if (!root.toastsEnabled) return
-    toastModel.insert(0, { text: String(t.text || ""), kind: String(t.kind || "remark"), note: String(t.note || ""), ts: t.ts })
+    toastModel.insert(0, { text: String(t.text || ""), kind: String(t.kind || "remark"), note: String(t.note || ""), ts: t.ts,
+                           request: String(t.request || "") })
     while (toastModel.count > 5) toastModel.remove(toastModel.count - 1)
   }
 
@@ -193,8 +198,13 @@ Item {
           required property string kind
           required property string note
           required property double ts
+          required property string request
           readonly property bool quiet: kind === "observation"
           readonly property bool approval: kind === "approval"
+          // Answered by voice, timed out or superseded: the card withdraws, and its buttons
+          // could no longer answer anything (the daemon refuses a settled request's id).
+          readonly property bool settled: approval && request !== root.pendingApproval
+          onSettledChanged: if (settled) slot.dismiss()
           readonly property int lifetime: approval ? 31000 : (quiet ? root.toastLifetime * 0.6 : root.toastLifetime)
 
           Layout.preferredWidth: root.toastWidth
@@ -295,10 +305,10 @@ Item {
               }
 
               Row {
-                visible: slot.approval
+                visible: slot.approval && !slot.settled
                 spacing: Style.space(8)
-                Button { text: "󰐊 Run"; foreground: "#f4f4f4"; onClicked: { root.sendDecision(true); slot.dismiss() } }
-                Button { text: "󰜺 Skip"; foreground: "#f4f4f4"; onClicked: { root.sendDecision(false); slot.dismiss() } }
+                Button { text: "󰐊 Run"; foreground: "#f4f4f4"; onClicked: { root.sendDecision(slot.request, true); slot.dismiss() } }
+                Button { text: "󰜺 Skip"; foreground: "#f4f4f4"; onClicked: { root.sendDecision(slot.request, false); slot.dismiss() } }
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
                   textFormat: Text.PlainText

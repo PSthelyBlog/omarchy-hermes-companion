@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shlex
 import threading
 import time
@@ -108,11 +109,18 @@ def audit(entry: dict):
 # ------------------------------------------------------------------ approval
 class Approver:
     """Human-in-the-loop for tier-4 commands. Toast buttons write DECISION_FILE; voice
-    listens for yes/no. First answer wins; silence = deny."""
+    listens for yes/no. First answer wins; silence = deny.
 
-    def __init__(self, toast: Callable[[str, str, str], None], speak: Callable[[str], None],
-                 listen_yes_no: Callable[[float], Optional[bool]], set_status: Callable[[str], None]):
+    Each request gets an id, published as `approval` while it waits and carried by its toast. A
+    button answer names that id (see decide()), so a card left over from an earlier, settled
+    request can never answer a newer one."""
+
+    def __init__(self, toast: Callable[..., None], speak: Callable[[str], None],
+                 listen_yes_no: Callable[[float, threading.Event], Optional[bool]],
+                 set_status: Callable[[str], None],
+                 publish: Callable[[Optional[dict]], None] = lambda pending: None):
         self.toast, self.speak, self.listen_yes_no, self.set_status = toast, speak, listen_yes_no, set_status
+        self.publish = publish
         self._lock = threading.Lock()
 
     def __call__(self, command: str, description: str, *, allow_permanent: bool = True,
@@ -127,24 +135,26 @@ class Approver:
                 audit({"kind": "refused", "command": command, "reason": reason})
                 self.toast(f"Refused: {command}", "held", reason)
                 return "deny"
-            try:
-                DECISION_FILE.unlink()
-            except FileNotFoundError:
-                pass
+            request = secrets.token_hex(8)
+            DECISION_FILE.unlink(missing_ok=True)
             self.set_status("approval")
-            self.toast(command, "approval", description or reason)
-            self.speak(f"May I run: {_spoken(command)}? Say yes or no.")
-            decision = self._wait(APPROVAL_TIMEOUT)
+            self.publish({"id": request, "command": command, "expires": time.time() + APPROVAL_TIMEOUT})
+            try:
+                self.toast(command, "approval", description or reason, request=request)
+                self.speak(f"May I run: {_spoken(command)}? Say yes or no.")
+                decision = self._wait(request, APPROVAL_TIMEOUT)
+            finally:
+                self.publish(None)   # settled: its card and any late answer to it no longer count
             self.set_status("thinking")
             audit({"kind": "approval", "command": command, "reason": description or reason, "decision": decision})
             return "once" if decision else "deny"
 
-    def _wait(self, timeout: float) -> bool:
+    def _wait(self, request: str, timeout: float) -> bool:
         result: dict = {}
-        done = threading.Event()
+        done = threading.Event()   # set once settled; also stops this request's voice listener
 
         def voice():
-            v = self.listen_yes_no(timeout)
+            v = self.listen_yes_no(timeout, done)
             if v is not None and not done.is_set():
                 result.setdefault("v", v)
                 done.set()
@@ -152,20 +162,38 @@ class Approver:
         threading.Thread(target=voice, daemon=True).start()
         deadline = time.time() + timeout
         while time.time() < deadline and not done.is_set():
-            if DECISION_FILE.exists():
-                try:
-                    d = json.loads(DECISION_FILE.read_text())
-                    result.setdefault("v", bool(d.get("approve")))
-                    done.set()
-                    break
-                except Exception:
-                    pass
+            try:
+                d = json.loads(DECISION_FILE.read_text())
+            except (OSError, ValueError):
+                d = None
+            # Only an answer naming this request counts. decide() already refuses others; one
+            # that slips past (a request settled between that check and the write) stays unread.
+            if isinstance(d, dict) and d.get("request") == request:
+                result.setdefault("v", d.get("approve") is True)
+                done.set()
+                break
             time.sleep(0.2)
-        try:
-            DECISION_FILE.unlink()
-        except FileNotFoundError:
-            pass
+        done.set()
+        DECISION_FILE.unlink(missing_ok=True)
         return bool(result.get("v", False))
+
+
+def decide(arg: str, pending: Optional[dict]) -> str:
+    """`--ctl decide <request> <yes|no>`: answer the approval request with that id.
+
+    `pending` is the request waiting now (the Approver's published `approval`). An answer for any
+    other request is refused: its card outlived it, and nothing waits for that answer any more."""
+    parts = arg.split()
+    if len(parts) != 2:
+        return "usage: decide <request> <yes|no>"
+    request, answer = parts
+    if not pending or request != pending.get("id"):
+        return "stale: no such request is waiting"
+    DECISION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = DECISION_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"request": request, "approve": answer.lower() in ("yes", "run", "approve", "1", "true")}))
+    os.replace(tmp, DECISION_FILE)
+    return "decided"
 
 
 def _spoken(command: str, limit: int = 120) -> str:
@@ -191,6 +219,16 @@ def parse_yes_no(text: str) -> Optional[bool]:
 FILE_TOOLS = {"write_file", "patch", "read_file"}
 
 
+def _hermes_approval_mode() -> str:
+    """Hermes's `approvals.mode` (manual / smart / off), "" if this Hermes can't say: then the hook
+    escalates, which at worst asks twice."""
+    try:
+        from tools.approval_context import _get_approval_mode
+        return str(_get_approval_mode())
+    except Exception:
+        return ""
+
+
 def pre_tool_call(tool_name: str = "", args: Optional[dict] = None, **_) -> Optional[dict]:
     """Hermes ``pre_tool_call`` hook (in-process, applies to the companion and its children).
     - terminal: tier 5 → block; tier 4 → escalate to the approval gate (which calls Approver).
@@ -204,12 +242,15 @@ def pre_tool_call(tool_name: str = "", args: Optional[dict] = None, **_) -> Opti
             audit({"kind": "refused", "command": cmd, "reason": reason})
             return {"action": "block", "message": f"Refused by Hermes Companion policy ({reason}). Tell the user instead."}
         if tier == 4:
-            # Hermes' own dangerous-pattern gate already reaches the Approver with the real
-            # command text; only escalate the companion-specific tier-4 cases it doesn't know.
+            # Tier 4 asks a person. Hermes's plugin-approval gate (this "approve" escalation) always
+            # does. Its own dangerous-command gate does only in `manual` mode: in `smart` mode, the
+            # default, a guardian model may approve the command instead. So defer to Hermes's gate
+            # only for commands it flags itself and only in manual mode, which also avoids asking
+            # twice; anything else is escalated here.
             from tools.approval_detection import detect_dangerous_command
-            if not detect_dangerous_command(cmd)[0]:
-                return {"action": "approve", "message": f"{reason}: {cmd}", "rule_key": "companion"}
-            return None
+            if detect_dangerous_command(cmd)[0] and _hermes_approval_mode() == "manual":
+                return None
+            return {"action": "approve", "message": f"{reason}: {cmd}", "rule_key": "companion"}
         audit({"kind": "run", "command": cmd})
         return None
     if tool_name in FILE_TOOLS:

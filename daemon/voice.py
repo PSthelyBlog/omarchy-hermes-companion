@@ -63,9 +63,11 @@ class Voice:
         self._stop_speech.set()
 
     # ---------------------------------------------------------------- listen
-    def listen_for(self, timeout: float, parse):
+    def listen_for(self, timeout: float, parse, cancel: threading.Event | None = None):
         """Capture one short utterance and return parse(transcript) (None on silence/timeout).
-        Used for yes/no approvals; does not go to the agent."""
+        Used for yes/no approvals; does not go to the agent. Setting `cancel` (the approval was
+        settled some other way) stops the capture and discards what it heard, so the microphone
+        is free for the next request."""
         if self._capturing.is_set():
             return None
         from hermes_cli import voice as hv
@@ -79,7 +81,10 @@ class Voice:
                                      max_recording_seconds=min(8.0, timeout))
             if not ok:
                 return None
-            done.wait(timeout=timeout)
+            deadline = time.monotonic() + timeout
+            while not done.wait(0.1):
+                if time.monotonic() >= deadline or (cancel is not None and cancel.is_set()):
+                    break
             try:
                 hv.stop_continuous()
             except Exception:
@@ -87,6 +92,8 @@ class Voice:
             self._release_recorder(hv)
         finally:
             self._capturing.clear()
+        if cancel is not None and cancel.is_set():
+            return None
         return parse(" ".join(got))
 
     def listen(self) -> bool:

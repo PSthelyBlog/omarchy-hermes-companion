@@ -23,7 +23,9 @@ omarchy plugin add https://github.com/PSthelyBlog/omarchy-hermes-companion.git -
 ```
 Enabling the plugin opens the installer in a floating terminal the first time (checks Omarchy tooling and Hermes,
 has Hermes install its `voice` extra, writes the systemd --user unit and Hyprland keybinds, starts the daemon).
-Re-run it anytime: `~/.config/omarchy/plugins/hermes.companion/install.sh`. Update with `omarchy plugin update hermes.companion`.
+Re-run it anytime: `~/.config/omarchy/plugins/hermes.companion/install.sh`. Update with `omarchy plugin update hermes.companion`,
+then `omarchy restart shell`: the shell keeps the plugin's always-loaded service (toasts, approval cards) from when it
+started, so a new version of it only loads after a shell restart or a new login.
 
 ## Uninstall
 ```bash
@@ -73,6 +75,10 @@ actions. Every child command passes through Hermes' own safety gate plus the com
 | 0-3 | reads, builds, git, writes/deletes inside `$HOME` (not dotfiles), `/tmp` | runs |
 | 4 | Hermes dangerous patterns (recursive delete, force push, pipe-to-shell, service restarts, …), anything touching dotfiles or paths outside `$HOME`, `pkill`, credential files | **asks**: toast with Run / Skip + spoken "May I run …? say yes or no" (30 s, silence = no) |
 | 5 | Hermes hardline floors (`rm -rf ~`, `dd` to devices, `mkfs`, …), `sudo`/`pkexec`, system-scope `systemctl`, shutdown | refused |
+
+Each approval request has an id, shown as `approval` in `--ctl status` while it waits. Run / Skip and
+`--ctl decide <request> <yes|no>` answer only that request: once it is settled (answered, by voice too, or
+timed out) its card withdraws, and a late answer to it is refused instead of approving the next command.
 
 Audit log: `~/.local/state/hermes-companion/actions.jsonl` (every run, write, approval, refusal).
 
@@ -128,7 +134,7 @@ screen history.
 ## Commands
 ```
 CTL="/usr/bin/python3 $HOME/.config/omarchy/plugins/hermes.companion/daemon/companion.py --ctl"
-$CTL status | toggle-eyes | listen | toggle-mute | toggle-toasts | toggle-actions | decide <yes|no> | hush | tick | forget | models | set-vision <provider:model> | set-reasoning <provider:model|same> | set-{vision,reasoning}-effort <low|medium|high> | toggle-{vision,reasoning}-thinking | set-language <auto|language name> | set-user-context <text|(empty)> | set-toast-position <anchor>[,<margin_x>[,<margin_y>]] | say <text> | ask <text> | toast <text> | quit
+$CTL status | toggle-eyes | listen | toggle-mute | toggle-toasts | toggle-actions | decide <request> <yes|no> | hush | tick | forget | models | set-vision <provider:model> | set-reasoning <provider:model|same> | set-{vision,reasoning}-effort <low|medium|high> | toggle-{vision,reasoning}-thinking | set-language <auto|language name> | set-user-context <text|(empty)> | set-toast-position <anchor>[,<margin_x>[,<margin_y>]] | say <text> | ask <text> | toast <text> | quit
 # ask / text: same as speaking to it (reply is toasted + spoken); text is what the panel's input box sends
 # forget: drop the conversation and everything seen so far (panel: Forget); a turn in flight is discarded
 journalctl --user -fu hermes-companion
