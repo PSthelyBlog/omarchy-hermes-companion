@@ -7,8 +7,9 @@ answers voice requests on demand (right-click the bar icon, the Listen button, o
 (default = same as vision). Lists are built from every provider Hermes has credentials for, grouped by provider,
 with vision capability from models.dev / the Nous catalog. When the two differ, the vision model describes each
 frame in a stateless one-shot and the reasoning model runs the persistent conversation on that text.
-Tools are read-only (web search/extract, file read/search) unless you turn on **Actions** (below). It answers in the
-language you use and can be told who you are (`user_context`) — see *Configuration*.
+Only your requests use tools: read-only ones (web search/extract, file read/search) unless you turn on **Actions**
+(below). Screen ticks get none (see *Privacy*). It answers in the language you use and can be told who you are
+(`user_context`) — see *Configuration*.
 
 ## Requirements
 - Omarchy 4.x (`omarchy`, `omarchy-shell`, `grim`, `hyprctl`, `notify-send`, PipeWire tools) — `install.sh` offers `omarchy pkg add` for missing packages.
@@ -67,7 +68,9 @@ commands use only the standard library and stay on the system Python.
 Toggle **Actions** in the popup (or `--ctl toggle-actions`). Voice/text requests can then get
 things *done*: the companion never runs commands itself — it hands the task to a Hermes
 subagent (`delegate_task`) that has `terminal` and file tools. Screen ticks can never trigger
-actions. Every child command passes through Hermes' own safety gate plus the companion policy
+actions. Each hand-over asks you first: its card shows the task and its context, the question is
+spoken, and nothing starts without your yes (with Hermes's approvals turned off, nothing starts).
+Every child command then passes through Hermes' own safety gate plus the companion policy
 (`daemon/actions.py`):
 
 | Tier | What | Behaviour |
@@ -75,6 +78,11 @@ actions. Every child command passes through Hermes' own safety gate plus the com
 | 0-3 | reads, builds, git, writes/deletes inside `$HOME` (not dotfiles), `/tmp` | runs |
 | 4 | Hermes dangerous patterns (recursive delete, force push, pipe-to-shell, service restarts, …), anything touching dotfiles or paths outside `$HOME`, `pkill`, credential files | **asks**: toast with Run / Skip + spoken "May I run …? say yes or no" (30 s, silence = no) |
 | 5 | Hermes hardline floors (`rm -rf ~`, `dd` to devices, `mkfs`, …), `sudo`/`pkexec`, system-scope `systemctl`, shutdown | refused |
+
+Tier 4 always goes to you, never to a smart-mode guardian model. With Hermes's approvals turned off
+(`approvals.mode: off`, or yolo), nobody would be asked, so tier-4 commands are refused instead of run. A command
+that Hermes's own gate asks about in `manual` mode is asked there (on the same card), which also lets through commands
+you have told Hermes to always allow.
 
 Each approval request has an id, shown as `approval` in `--ctl status` while it waits. Run / Skip and
 `--ctl decide <request> <yes|no>` answer only that request: once it is settled (answered, by voice too, or
@@ -89,6 +97,14 @@ prompt or the Wi-Fi QR code is showing, and on the lock screen — or whenever t
 `daemon/perception.py`); you can pause the eyes anytime from the widget or `Super+Alt+E`. While the screen is shared
 or recorded, unprompted observations and remarks are not drawn as toasts (held remarks go to the panel's recent
 list); replies to your own requests still are.
+
+Screen ticks run no tools. A tick is driven by what is on screen, and a webpage, a message or a window title can put
+text there, so every tool call made during a tick is refused before it runs, with Actions on or off. The screen stays
+in the conversation, so requests don't trust it either: once the conversation has read a local file (or a helper has
+run a command), anything a tool would send off the machine (a web search, a page or image fetch) first shows its
+query or URL on an approval card and asks out loud; silence = no. **Forget** resets this. With Hermes's approvals
+turned off (`approvals.mode: off`, or yolo), such calls are refused instead, since nobody would be asked.
+
 Secret values the models write out (API keys and tokens in well-known formats, private keys, `NAME=value` lines whose
 name ends in key/token/password…) are masked before they are toasted, stored, logged or spoken, and in split mode
 before the vision model's description reaches the reasoning model. Screenshots themselves are not altered.
@@ -103,7 +119,7 @@ screen history.
 - `daemon/brain.py`      persistent Hermes AIAgent (web/file read-only), JSON tick protocol; native vs split vision
 - `daemon/catalog.py`    provider/model catalog with vision flags (Hermes credentials + models.dev + Nous catalog)
 - `daemon/voice.py`      on-demand Hermes VAD capture → local faster-whisper → edge TTS
-- `daemon/actions.py`    tiered approval policy for the helper subagent's commands (see *Actions*)
+- `daemon/actions.py`    tool policy (no tools on screen ticks, asks before local data leaves, helper tasks) and the tiered approval policy for the helper's commands (see *Actions*, *Privacy*)
 - `daemon/prompt.md`     system prompt; `{{USER}}`, `{{USER_CONTEXT}}`, `{{LANGUAGE_RULE}}` are filled from `companion.json`
 - `daemon/policy.py`     cooldowns / fullscreen / call / idle gating for unprompted speech
 - `daemon/state.py`      `~/.local/state/hermes-companion/state.json` + `$XDG_RUNTIME_DIR/hermes-companion.sock`

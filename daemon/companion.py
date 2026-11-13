@@ -186,7 +186,7 @@ class Companion:
         from tools import delegate_tool
         delegate_tool_config._get_subagent_approval_callback = lambda: self.approver
         delegate_tool._get_subagent_approval_callback = lambda: self.approver
-        install_hook()   # tier-5 block / tier-4 escalate for terminal + file tools
+        install_hook(self.approver)   # tool policy: screen ticks, outbound after local reads, helper tasks, tiers
         os.environ["HERMES_INTERACTIVE"] = "1"   # tells Hermes' gate a human can answer
 
     def _listen_yes_no(self, timeout: float, settled: threading.Event):
