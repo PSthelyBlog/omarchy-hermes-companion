@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "daemon"))
 
+from actions import REQUEST, SCREEN  # noqa: E402
 from brain import CompanionAgent, ModelSpec, _drop_screen_turns  # noqa: E402
 
 FRAME = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}
@@ -98,7 +99,7 @@ class Forget(unittest.TestCase):
 
     def test_turn_is_stored_normally(self):
         a = agent()
-        self.assertEqual(a._turn("[TEXT REQUEST from P]\nhi", agent=self._hermes()), "reply")
+        self.assertEqual(a._turn("[TEXT REQUEST from P]\nhi", REQUEST, agent=self._hermes()), "reply")
         self.assertEqual(len(a.history), 2)
 
     def test_forget_clears_history(self):
@@ -108,11 +109,11 @@ class Forget(unittest.TestCase):
 
     def test_forget_during_a_turn_discards_that_turn(self):
         a = agent(history=tick_split(1))
-        out = a._turn("[SCREEN TICK] 12:00", agent=self._hermes(during=a.forget))
+        out = a._turn("[SCREEN TICK] 12:00", SCREEN, agent=self._hermes(during=a.forget))
         self.assertEqual(out, "")
         self.assertEqual(a.history, [])
         # The next turn starts from the empty history.
-        a._turn("[TEXT REQUEST from P]\nhi", agent=self._hermes())
+        a._turn("[TEXT REQUEST from P]\nhi", REQUEST, agent=self._hermes())
         self.assertEqual([m["content"] for m in a.history], ["[TEXT REQUEST from P]\nhi", "reply"])
 
 

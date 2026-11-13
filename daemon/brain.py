@@ -23,12 +23,19 @@ from typing import Any, Optional
 HERMES_ROOT = Path(os.environ.get("HERMES_AGENT_DIR", Path.home() / ".hermes/hermes-agent"))
 sys.path.insert(0, str(HERMES_ROOT))
 
+from actions import GUARD, REQUEST, SCREEN  # noqa: E402
+
 log = logging.getLogger("companion.agent")
 
 PROMPT_FILE = Path(__file__).with_name("prompt.md")
+# Tools in the schema. Which may run is decided per call by the tool policy (actions.pre_tool_call):
+# none on screen ticks; on requests, sending anything off the machine after a local read asks first.
 READ_ONLY_TOOLS = {"web_search", "web_extract", "read_file", "search_files", "vision_analyze"}
 ACTION_TOOLS = READ_ONLY_TOOLS | {"delegate_task"}
 KEEP_IMAGES = 3  # most recent frames kept in context; older ones are replaced by a stub
+# One turn at a time across the whole process, also across a rebuild (model, actions, language…
+# changed) while the old agent's turn is still running: the tool policy reads the running turn's kind.
+TURN_LOCK = threading.Lock()
 
 DESCRIBE_PROMPT = (
     "You are the eyes of a desktop monitoring assistant. Describe this screenshot for a colleague "
@@ -178,7 +185,7 @@ class CompanionAgent:
                                .replace("{{LANGUAGE_RULE}}", self.language_rule)
                                .replace("{{USER_CONTEXT}}", resolved_context))
         self.history: list[dict[str, Any]] = []
-        self._lock = threading.Lock()  # one turn at a time; held for the whole model call
+        self._lock = TURN_LOCK  # one turn at a time; held for the whole model call
         self._hist_lock = threading.Lock()  # guards history + _epoch; never held during a model call
         self._epoch = 0  # bumped by forget(); a turn that started before it is discarded
         self.vision = vision
@@ -186,8 +193,8 @@ class CompanionAgent:
         self.split = reasoning is not None and reasoning.key != vision.key
         self.actions = actions
         self.agent = _make_agent(self.reasoning, user_name, self.system_prompt, tools=True, max_iterations=6)
-        # Request-only twin with delegate_task. Separate instance so screen ticks keep the
-        # read-only schema (and their prompt cache); it shares `history` by reference at call time.
+        # Request-only twin with delegate_task. Separate instance so screen ticks never get its
+        # schema (and keep their prompt cache); it shares `history` by reference at call time.
         self.actor = _make_agent(self.reasoning, user_name, self.system_prompt, tools=True, max_iterations=10, actions=True) if actions else None
         self.eyes = _make_agent(self.vision, user_name, DESCRIBE_PROMPT, tools=False, max_iterations=1) if self.split else None
         log.info(
@@ -209,9 +216,11 @@ class CompanionAgent:
                 msg["content"] = [p for p in msg["content"] if p.get("type") == "text"] or [{"type": "text", "text": "[earlier screen frame omitted]"}]
                 msg["content"].append({"type": "text", "text": "[screen frame omitted to save context]"})
 
-    def _turn(self, content: Any, agent=None) -> str:
+    def _turn(self, content: Any, kind: str, agent=None) -> str:
+        """One model turn. `kind` (SCREEN or REQUEST) is what the tool policy checks each tool call
+        against: a screen tick may call none."""
         agent = agent or self.agent
-        with self._lock:
+        with self._lock, GUARD.turn(kind):
             # No later turn consumes a detached delegate_task result here, so declare the
             # session stateless: Hermes then runs children synchronously and the helper's
             # result comes back inside this very turn (ContextVar → must be set per thread).
@@ -255,6 +264,7 @@ class CompanionAgent:
         with self._hist_lock:
             self._epoch += 1
             self.history = []
+        GUARD.forget()
 
     def observe(self, text: str, image_data_url: Optional[str]) -> dict:
         """Feed one perception tick. Returns {observation, should_speak, urgency, text}."""
@@ -269,7 +279,7 @@ class CompanionAgent:
             content = [{"type": "text", "text": text}, {"type": "image_url", "image_url": {"url": image_data_url}}]
         else:
             content = text
-        raw = self._turn(content)
+        raw = self._turn(content, SCREEN)
         data = _extract_json(raw) or {}
         return {
             # Redact before truncating, so a key cut at the limit is still recognised.
@@ -287,4 +297,4 @@ class CompanionAgent:
             f"Reply in plain spoken prose (no JSON, no markdown, no lists), 1-4 sentences unless "
             f"more is truly needed. {self.language_rule}"
         )
-        return _redact(self._turn(msg, agent=self.actor if self.actions else None))
+        return _redact(self._turn(msg, REQUEST, agent=self.actor if self.actions else None))
