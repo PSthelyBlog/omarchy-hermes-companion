@@ -69,7 +69,7 @@ Toggle **Actions** in the popup (or `--ctl toggle-actions`). Voice/text requests
 things *done*: the companion never runs commands itself — it hands the task to a Hermes
 subagent (`delegate_task`) that has `terminal` and file tools. Screen ticks can never trigger
 actions. Each hand-over asks you first: its card shows the task and its context, the question is
-spoken, and nothing starts without your yes (with Hermes's approvals turned off, nothing starts).
+spoken, and nothing starts without your yes. A task can't carry images.
 Every child command then passes through Hermes' own safety gate plus the companion policy
 (`daemon/actions.py`):
 
@@ -79,10 +79,10 @@ Every child command then passes through Hermes' own safety gate plus the compani
 | 4 | Hermes dangerous patterns (recursive delete, force push, pipe-to-shell, service restarts, …), anything touching dotfiles or paths outside `$HOME`, `pkill`, credential files | **asks**: toast with Run / Skip + spoken "May I run …? say yes or no" (30 s, silence = no) |
 | 5 | Hermes hardline floors (`rm -rf ~`, `dd` to devices, `mkfs`, …), `sudo`/`pkexec`, system-scope `systemctl`, shutdown | refused |
 
-Tier 4 always goes to you, never to a smart-mode guardian model. With Hermes's approvals turned off
-(`approvals.mode: off`, or yolo), nobody would be asked, so tier-4 commands are refused instead of run. A command
-that Hermes's own gate asks about in `manual` mode is asked there (on the same card), which also lets through commands
-you have told Hermes to always allow.
+In the companion, Hermes's approvals run in `manual` mode whatever `approvals.mode` says, so every approval comes to
+you: never to the smart-mode guardian model, and `off` doesn't skip it. A command that Hermes's own gate flags is asked
+there (on the same card), which also lets through commands you have told Hermes to always allow. Only yolo would skip
+the asking; the daemon never turns it on, and the companion refuses such calls if it is.
 
 Each approval request has an id, shown as `approval` in `--ctl status` while it waits. Run / Skip and
 `--ctl decide <request> <yes|no>` answer only that request: once it is settled (answered, by voice too, or
@@ -101,16 +101,25 @@ list); replies to your own requests still are.
 Screen ticks run no tools. A tick is driven by what is on screen, and a webpage, a message or a window title can put
 text there, so every tool call made during a tick is refused before it runs, with Actions on or off. The screen stays
 in the conversation, so requests don't trust it either: once the conversation has read a local file (or a helper has
-run a command), anything a tool would send off the machine (a web search, a page or image fetch) first shows its
-query or URL on an approval card and asks out loud; silence = no. **Forget** resets this. With Hermes's approvals
-turned off (`approvals.mode: off`, or yolo), such calls are refused instead, since nobody would be asked.
+run a command), a web search or page fetch first shows its query or URLs on an approval card and asks out loud;
+silence = no. **Forget** resets this.
+
+Your data goes only to the models you picked for the companion. Requests and helpers run a fixed set of tools (web
+search and fetch, file read, search and write, and with Actions the terminal and the helper itself); anything else is
+refused. There are no image tools: the only images a model gets are the screen frames, sent to your vision model.
+Hermes would send an image, and the question about it, to its auxiliary vision model, which can belong to another
+provider. Hermes's context compression is off for the same reason, in the companion and its helpers, since it
+summarizes the conversation with an auxiliary model; the companion keeps the conversation short itself instead
+(below). A helper runs on the companion's model; if Hermes's `delegation` settings pin another provider, model or
+endpoint, hand-overs are refused.
 
 Secret values the models write out (API keys and tokens in well-known formats, private keys, `NAME=value` lines whose
 name ends in key/token/password…) are masked before they are toasted, stored, logged or spoken, and in split mode
 before the vision model's description reaches the reasoning model. Screenshots themselves are not altered.
-The conversation (and with it every frame, description and window title seen so far) is kept in memory until the
-daemon restarts or you press **Forget** in the panel (`--ctl forget`); pausing the eyes stops new captures but does
-not forget. Switching to a model from a different provider carries only your spoken/typed exchanges over, never the
+The conversation (and with it the frames, descriptions and window titles seen) is kept in memory until the daemon
+restarts or you press **Forget** in the panel (`--ctl forget`); pausing the eyes stops new captures but does not
+forget. It is trimmed as it grows: past about 120 screen checks or 60k tokens, the oldest screen checks go first,
+then your oldest requests. Switching to a model from a different provider carries only your spoken/typed exchanges over, never the
 screen history.
 
 ## Layout

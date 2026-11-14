@@ -30,9 +30,18 @@ log = logging.getLogger("companion.agent")
 PROMPT_FILE = Path(__file__).with_name("prompt.md")
 # Tools in the schema. Which may run is decided per call by the tool policy (actions.pre_tool_call):
 # none on screen ticks; on requests, sending anything off the machine after a local read asks first.
-READ_ONLY_TOOLS = {"web_search", "web_extract", "read_file", "search_files", "vision_analyze"}
+# No image tools: Hermes may hand an image to an auxiliary vision model of another provider.
+READ_ONLY_TOOLS = {"web_search", "web_extract", "read_file", "search_files"}
 ACTION_TOOLS = READ_ONLY_TOOLS | {"delegate_task"}
 KEEP_IMAGES = 3  # most recent frames kept in context; older ones are replaced by a stub
+# The companion keeps its conversation short itself (_bound_history). Hermes's context compression
+# stays off: it summarizes the conversation with an auxiliary model, which can belong to another
+# provider than the one picked for the companion. Screen turns go first, then request turns, whole
+# turns at a time, cut down to TRIM_TO of the limit so the prompt cache isn't broken on every turn.
+MAX_SCREEN_TURNS = 120
+HISTORY_BUDGET = 240_000   # characters, about 60k tokens; a kept frame counts IMAGE_CHARS
+IMAGE_CHARS = 6_000
+TRIM_TO = 0.75
 # One turn at a time across the whole process, also across a rebuild (model, actions, language…
 # changed) while the old agent's turn is still running: the tool policy reads the running turn's kind.
 TURN_LOCK = threading.Lock()
@@ -151,7 +160,7 @@ def _make_agent(spec: ModelSpec, user_name: str, system_prompt: str, tools: bool
 
     # Children inherit the parent's toolsets, so the action agent must carry terminal+file
     # itself; its own schema is then trimmed back to ACTION_TOOLS below.
-    toolsets = ["web", "file", "vision"] + (["terminal", "delegation"] if actions else [])
+    toolsets = ["web", "file"] + (["terminal", "delegation"] if actions else [])
     agent = AIAgent(
         model=spec.model,
         provider=spec.provider,
@@ -169,7 +178,82 @@ def _make_agent(spec: ModelSpec, user_name: str, system_prompt: str, tools: bool
     allowed = ACTION_TOOLS if actions else READ_ONLY_TOOLS
     agent.tools = [t for t in (agent.tools or []) if tools and t["function"]["name"] in allowed]
     agent.valid_tool_names = {t["function"]["name"] for t in agent.tools}
+    _no_compression(agent)
     return agent
+
+
+def _no_compression(agent):
+    """No context compression or micro-compaction (see MAX_SCREEN_TURNS): no auxiliary summary call."""
+    agent.compression_enabled = False
+    compressor = getattr(agent, "context_compressor", None)
+    if compressor is not None and hasattr(compressor, "_micro_compact_enabled"):
+        compressor._micro_compact_enabled = False
+
+
+def keep_helpers_uncompressed():
+    """Helpers (delegate_task) are Hermes agents too: build them without context compression."""
+    from tools import delegate_tool
+    build = delegate_tool._build_child_agent
+    if getattr(build, "companion_uncompressed", False):
+        return
+
+    def _build_child_agent(*args, **kwargs):
+        child = build(*args, **kwargs)
+        _no_compression(child)
+        return child
+    _build_child_agent.companion_uncompressed = True
+    delegate_tool._build_child_agent = _build_child_agent
+
+
+def _split_turns(history: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Whole turns: each user message with the assistant and tool messages after it."""
+    turns: list[list[dict[str, Any]]] = []
+    for m in history:
+        if m.get("role") == "user" or not turns:
+            turns.append([])
+        turns[-1].append(m)
+    return turns
+
+
+def _is_request_turn(turn: list[dict[str, Any]]) -> bool:
+    return turn[0].get("role") == "user" and _text_of(turn[0]).lstrip().startswith(_REQUEST_TAGS)
+
+
+def _size(msg: dict[str, Any]) -> int:
+    c = msg.get("content")
+    size = len(c) if isinstance(c, str) else 0
+    if isinstance(c, list):
+        for part in c:
+            if isinstance(part, dict):
+                size += IMAGE_CHARS if part.get("type") in ("image_url", "image") else len(str(part.get("text", "")))
+    if msg.get("tool_calls"):
+        size += len(json.dumps(msg["tool_calls"], default=str))
+    return size
+
+
+def _bound_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The history cut to MAX_SCREEN_TURNS screen turns and HISTORY_BUDGET characters, dropping the
+    oldest screen turns first, then the oldest request turns, never the newest turn."""
+    turns = _split_turns(history)
+    sizes = [sum(_size(m) for m in t) for t in turns]
+    screen = [i for i, t in enumerate(turns) if not _is_request_turn(t)]
+    if len(screen) <= MAX_SCREEN_TURNS and sum(sizes) <= HISTORY_BUDGET:
+        return history
+    drop: set[int] = set()
+    if len(screen) > MAX_SCREEN_TURNS:
+        drop.update(screen[:len(screen) - int(MAX_SCREEN_TURNS * TRIM_TO)])
+    total = sum(size for i, size in enumerate(sizes) if i not in drop)
+    if total > HISTORY_BUDGET:
+        requests = [i for i in range(len(turns)) if i not in screen]
+        for i in [i for i in screen if i not in drop] + requests:
+            if total <= HISTORY_BUDGET * TRIM_TO:
+                break
+            if i != len(turns) - 1:
+                drop.add(i)
+                total -= sizes[i]
+    log.info("history trimmed: %d of %d turns dropped (%d screen, %d request)", len(drop), len(turns),
+             len(drop & set(screen)), len(drop - set(screen)))
+    return [m for i, t in enumerate(turns) if i not in drop for m in t]
 
 
 class CompanionAgent:
@@ -231,6 +315,7 @@ class CompanionAgent:
                 pass
             with self._hist_lock:
                 self._prune_images()
+                self.history = _bound_history(self.history)
                 epoch, history = self._epoch, self.history
             result = agent.run_conversation(content, system_message=self.system_prompt, conversation_history=history)
             with self._hist_lock:

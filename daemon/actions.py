@@ -4,15 +4,17 @@ Tool policy, enforced in Hermes's ``pre_tool_call`` hook before a tool runs, Act
   screen ticks  no tools: every call made during a screen tick is refused. A tick is driven by what
                 is on screen, which whoever wrote a webpage, a message or a window title controls
                 too, so it must not be able to read files or reach the network.
-  requests      once the conversation holds local data (a file read or search, a helper's command
-                output), anything a tool would send off the machine (a web search, a page or image
-                fetch, any tool not known to stay local) asks the user first and shows the query or
-                URL. Screen-derived history can steer what the model asks for, but cannot move local
-                data out unseen.
-  helper tasks  with Actions on, each ``delegate_task`` asks the user first and shows its goal.
+  requests      only a fixed set of tools runs (ALLOWED_TOOLS); anything else is refused, image
+                tools included, since Hermes may hand an image to an auxiliary model of another
+                provider. Once the conversation holds local data (a file read or search, a helper's
+                command output), a web search or page fetch asks the user first and shows the query
+                or URLs. Screen-derived history can steer what the model asks for, but cannot move
+                local data out unseen.
+  helper tasks  with Actions on, each ``delegate_task`` asks the user first and shows its goal;
+                a task carrying images is refused.
 The hook itself only escalates; Hermes's approval gate then asks the user through the Approver.
-Where that gate would let a call through without asking (``approvals.mode: off``, yolo), the
-call is refused instead.
+Hermes's approvals run in manual mode in this process (manual_approvals); where its gate would
+still let a call through without asking (yolo), the call is refused instead.
 
 Action policy for the helper's commands (fixed, no modes):
   tier 0-3  auto   — anything Hermes' guards don't flag, writes/deletes inside allowed roots
@@ -248,10 +250,15 @@ def parse_yes_no(text: str) -> Optional[bool]:
 # ------------------------------------------------------------------ tool policy (pre-tool hook)
 FILE_TOOLS = {"write_file", "patch", "read_file"}
 SCREEN, REQUEST = "screen", "request"
+# Tools that send their arguments off the machine.
+OUTBOUND_TOOLS = {"web_search", "web_extract"}
 # Tools whose results bring local data (file contents and names, command output) into the conversation.
 LOCAL_DATA_TOOLS = {"read_file", "search_files", "terminal", "process_manage", "patch"}
-# Tools that act on this machine only. Any other tool may send its arguments somewhere.
-LOCAL_TOOLS = LOCAL_DATA_TOOLS | {"write_file", "todo_list", "delegate_task"}
+# Everything a request, or a helper it starts, may run (brain gives the models the web and file
+# toolsets, plus terminal and delegation with Actions on). Anything else is refused. That includes
+# vision_analyze: Hermes may send an image, and the question about it, to an auxiliary vision model,
+# which can belong to another provider than the one the user picked.
+ALLOWED_TOOLS = OUTBOUND_TOOLS | LOCAL_DATA_TOOLS | {"write_file", "todo_list", "delegate_task"}
 CONTEXT_SHOWN = 600   # characters of a helper task's context shown on its approval card
 
 
@@ -368,25 +375,7 @@ def _block(message: str) -> dict:
     return {"action": "block", "message": message}
 
 
-# ------------------------------------------------------------------ what leaves the machine
-def _local_image(url: str) -> bool:
-    """vision_analyze loads a path or a data: URL from this machine; anything else with a scheme
-    (http:, https:, ftp:, file: …) counts as fetched."""
-    return url.lower().startswith("data:") or not re.match(r"[a-z][a-z0-9+.-]*:", url, re.I)
-
-
-def _brings_local_data(tool_name: str, args: dict) -> bool:
-    if tool_name == "vision_analyze":
-        return _local_image(str(args.get("image_url", "")).strip())
-    return tool_name in LOCAL_DATA_TOOLS
-
-
-def _leaves_machine(tool_name: str, args: dict) -> bool:
-    if tool_name == "vision_analyze":
-        return not _local_image(str(args.get("image_url", "")).strip())
-    return tool_name not in LOCAL_TOOLS
-
-
+# ------------------------------------------------------------------ cards
 def _host(url: str) -> str:
     try:
         return urlsplit(url).hostname or url
@@ -395,19 +384,23 @@ def _host(url: str) -> str:
 
 
 def _outbound_card(tool_name: str, args: dict) -> tuple[str, str]:
-    """(card text, spoken question) for a call that sends something off the machine."""
+    """(card text, spoken question) for a web search or page fetch."""
     if tool_name == "web_search":
         query = str(args.get("query", ""))
         return f"web search: {query}", f"May I search the web for: {_spoken(query)}?"
-    if tool_name == "web_extract":
-        urls = [str(u) for u in args["urls"]] if isinstance(args.get("urls"), list) else []
-        hosts = ", ".join(sorted({_host(u) for u in urls})) or "the web"
-        pages = "a page" if len(urls) == 1 else f"{len(urls)} pages"
-        return "open: " + "\n".join(urls), f"May I open {pages} on {_spoken(hosts)}?"
-    if tool_name == "vision_analyze":
-        url = str(args.get("image_url", ""))
-        return f"load image: {url}", f"May I load an image from {_spoken(_host(url))}?"
-    return f"{tool_name}: {json.dumps(args, default=str)[:1000]}", f"May I use {tool_name.replace('_', ' ')}?"
+    urls = [str(u) for u in args["urls"]] if isinstance(args.get("urls"), list) else []
+    hosts = ", ".join(sorted({_host(u) for u in urls})) or "the web"
+    pages = "a page" if len(urls) == 1 else f"{len(urls)} pages"
+    return "open: " + "\n".join(urls), f"May I open {pages} on {_spoken(hosts)}?"
+
+
+def _delegation_tasks(args: dict) -> list[dict]:
+    """The tasks a delegate_task call starts: Hermes takes both the `tasks` list and the legacy
+    single-goal shape (top-level `goal`), so both count."""
+    tasks = [t for t in (args.get("tasks") if isinstance(args.get("tasks"), list) else []) if isinstance(t, dict)]
+    if args.get("goal"):
+        tasks.insert(0, args)
+    return tasks
 
 
 def _delegation_card(args: dict) -> Optional[tuple[str, str]]:
@@ -418,12 +411,8 @@ def _delegation_card(args: dict) -> Optional[tuple[str, str]]:
         return f"tell the helper: {message}", f"May I tell the helper: {_spoken(message)}?"
     if action != "spawn":
         return None   # list / stop: no new work
-    # Hermes takes both the `tasks` list and the legacy single-goal shape; show whatever is there.
-    tasks = [t for t in (args.get("tasks") if isinstance(args.get("tasks"), list) else []) if isinstance(t, dict)]
-    if args.get("goal"):
-        tasks.insert(0, args)
     parts, goals = [], []
-    for task in tasks:
+    for task in _delegation_tasks(args):
         goal = str(task.get("goal", "")).strip()
         goals.append(goal)
         part = goal or "(no goal)"
@@ -431,8 +420,6 @@ def _delegation_card(args: dict) -> Optional[tuple[str, str]]:
         if context:
             more = len(context) - CONTEXT_SHOWN
             part += "\ncontext: " + context[:CONTEXT_SHOWN] + (f" … (+{more} characters)" if more > 0 else "")
-        if task.get("images"):
-            part += "\nimages: " + " ".join(str(i) for i in task["images"])
         parts.append(part)
     return "\n\n".join(parts) or "(no task)", f"May I hand this to the helper: {_spoken('; '.join(goals) or 'an empty task')}?"
 
@@ -453,17 +440,45 @@ def _check(tool_name: str, args: dict) -> Optional[dict]:
         # Screen ticks get no tools; neither does anything outside a turn.
         audit({"kind": "refused", "tool": tool_name, "reason": "screen tick" if GUARD.kind == SCREEN else "outside a request"})
         return _block("Refused by Hermes Companion: screen ticks have no tools. Answer from what you see.")
+    if tool_name not in ALLOWED_TOOLS:
+        audit({"kind": "refused", "tool": tool_name, "reason": "not one of the companion's tools"})
+        return _block(f"Refused by Hermes Companion: {tool_name} is not one of its tools (it loads no images either). "
+                      "Answer without it.")
+    if tool_name == "delegate_task" and str(args.get("action") or "spawn") in ("spawn", "steer"):
+        elsewhere = _helpers_routed_elsewhere()
+        if elsewhere:
+            audit({"kind": "refused", "tool": tool_name, "reason": f"helpers would run elsewhere: {elsewhere}"})
+            return _block(f"Refused by Hermes Companion: Hermes's delegation settings ({elsewhere}) would run the helper "
+                          "on another model than the companion's. Tell the user.")
     if tool_name == "delegate_task":
+        if any(task.get("images") for task in _delegation_tasks(args)):
+            audit({"kind": "refused", "tool": tool_name, "reason": "helper task with images"})
+            return _block("Refused by Hermes Companion: a helper task cannot carry images. Describe what is needed instead.")
         card = _delegation_card(args)
         return _escalate(card[0], "helper task", card[1], {"kind": "delegate", "task": card[0]}) if card else None
-    if GUARD.local_data and _leaves_machine(tool_name, args):
+    if GUARD.local_data and tool_name in OUTBOUND_TOOLS:
         text, question = _outbound_card(tool_name, args)
         return _escalate(text, "leaves this machine; a local file was read", question,
                          {"kind": "outbound", "tool": tool_name, "detail": text})
     directive = _action_policy(tool_name, args)
-    if _brings_local_data(tool_name, args):
+    if tool_name in LOCAL_DATA_TOOLS:
         GUARD.note_local_data()   # also when it waits for a yes, which may let it run
     return directive
+
+
+def _helpers_routed_elsewhere() -> str:
+    """The Hermes `delegation` settings that would run a helper on another model than the companion's
+    (by default a helper inherits its parent's provider, model and credentials), "" if none.
+    Also when this Hermes can't say."""
+    try:
+        from tools.delegate_tool_config import _load_config
+        cfg = _load_config()
+    except Exception:
+        return "unknown"
+    pinned = [f"delegation.{k}: {cfg[k]}" for k in ("provider", "model", "base_url") if str(cfg.get(k) or "").strip()]
+    if str(cfg.get("backend") or "default").strip() not in ("", "default"):
+        pinned.append(f"delegation.backend: {cfg['backend']}")
+    return ", ".join(pinned)
 
 
 def _hermes_approval_mode() -> str:
@@ -519,8 +534,17 @@ def _action_policy(tool_name: str, args: dict) -> Optional[dict]:
     return None
 
 
+def manual_approvals():
+    """Run Hermes's approvals in manual mode in this process, whatever `approvals.mode` says: every
+    approval goes to the user through the Approver. In smart mode a guardian model (an auxiliary
+    model call) would judge the commands Hermes flags, and `off` would approve without asking."""
+    from tools import approval_context
+    approval_context._get_approval_mode = lambda: "manual"
+
+
 def install_hook(approver: Approver):
     GUARD.approver = approver
+    manual_approvals()
     from hermes_cli.plugins import get_plugin_manager
     pm = get_plugin_manager()
     pm._hooks.setdefault("pre_tool_call", []).append(pre_tool_call)
