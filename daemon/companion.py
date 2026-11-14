@@ -20,7 +20,7 @@ from state import ControlServer, State  # noqa: E402
 from actions import Approver, audit, install_hook, parse_yes_no  # noqa: E402
 
 try:
-    from brain import CompanionAgent, ModelSpec  # noqa: E402
+    from brain import CompanionAgent, ModelSpec, keep_helpers_uncompressed  # noqa: E402
     from catalog import Catalog  # noqa: E402
     from perception import Perceiver, screen_shared  # noqa: E402
     from policy import PolicyConfig, SpeechPolicy  # noqa: E402
@@ -186,6 +186,7 @@ class Companion:
         from tools import delegate_tool
         delegate_tool_config._get_subagent_approval_callback = lambda: self.approver
         delegate_tool._get_subagent_approval_callback = lambda: self.approver
+        keep_helpers_uncompressed()   # helpers are Hermes agents too
         install_hook(self.approver)   # tool policy: screen ticks, outbound after local reads, helper tasks, tiers
         os.environ["HERMES_INTERACTIVE"] = "1"   # tells Hermes' gate a human can answer
 

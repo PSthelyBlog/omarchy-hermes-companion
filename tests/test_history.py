@@ -3,13 +3,16 @@
 CompanionAgent is built with __new__ so no Hermes agent (and no network) is needed."""
 import sys
 import threading
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "daemon"))
 
+import brain  # noqa: E402
 from actions import REQUEST, SCREEN  # noqa: E402
-from brain import CompanionAgent, ModelSpec, _drop_screen_turns  # noqa: E402
+from brain import CompanionAgent, ModelSpec, _bound_history, _drop_screen_turns  # noqa: E402
 
 FRAME = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}
 
@@ -115,6 +118,96 @@ class Forget(unittest.TestCase):
         # The next turn starts from the empty history.
         a._turn("[TEXT REQUEST from P]\nhi", REQUEST, agent=self._hermes())
         self.assertEqual([m["content"] for m in a.history], ["[TEXT REQUEST from P]\nhi", "reply"])
+
+
+class HistoryStaysBounded(unittest.TestCase):
+    """The companion trims its own history; Hermes's compression (an auxiliary model call) stays off."""
+
+    def setUp(self):
+        for name, value in (("MAX_SCREEN_TURNS", 8), ("HISTORY_BUDGET", 4_000), ("IMAGE_CHARS", 600)):
+            patcher = mock.patch.object(brain, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def turns(history):
+        return brain._split_turns(history)
+
+    def assertWhole(self, history):
+        self.assertEqual(history[0]["role"], "user")
+        for i, m in enumerate(history):
+            for call in m.get("tool_calls") or []:
+                self.assertIn(call["id"], {r.get("tool_call_id") for r in history[i + 1:] if r.get("role") == "tool"})
+            if m.get("role") == "tool":
+                self.assertTrue(any(c["id"] == m["tool_call_id"] for prior in history[:i] for c in prior.get("tool_calls") or []))
+
+    def test_under_the_limits_nothing_changes(self):
+        history = tick_split(1) + request_with_tool("VOICE", "q") + tick_split(2)
+        self.assertIs(_bound_history(history), history)
+
+    def test_old_screen_turns_go_first_and_in_one_step(self):
+        requests = request_with_tool("VOICE", "remind me when the build finishes")
+        history = tick_split(0) + requests + [m for n in range(1, 10) for m in tick_split(n)]   # 10 screen turns
+        kept = _bound_history(history)
+        screen = [t for t in self.turns(kept) if not brain._is_request_turn(t)]
+        self.assertEqual(len(screen), 6)                          # cut to TRIM_TO (75 %) of 8, not to 8
+        self.assertEqual(screen[-1], tick_split(9))               # the newest are kept, in order
+        self.assertTrue(all(m in kept for m in requests))         # the request turn survives
+        self.assertWhole(kept)
+        self.assertIs(_bound_history(kept), kept)                 # and the next turn leaves it alone
+
+    def test_over_budget_requests_go_after_screen_turns_but_never_the_newest(self):
+        big = [request_with_tool("TEXT", f"q{n}") for n in range(3)]
+        for turn in big:
+            turn[2]["content"] = "x" * 1500                         # a large tool result
+        history = big[0] + tick_split(1) + big[1] + tick_split(2) + big[2]
+        kept = _bound_history(history)
+
+        def has(m):   # identity: request turns share equal assistant messages
+            return any(k is m for k in kept)
+        self.assertFalse(any(has(m) for m in history if "SCREEN TICK" in str(m.get("content"))))  # screen turns first
+        self.assertFalse(any(has(m) for m in big[0]))             # then the oldest request
+        self.assertTrue(all(has(m) for m in big[2]))              # never the newest turn
+        self.assertLessEqual(sum(brain._size(m) for m in kept), 4_000)
+        self.assertWhole(kept)
+
+    def test_frames_count_toward_the_budget(self):
+        history = [m for n in range(7) for m in tick_native(n)]  # 7 frames x 600 > 4000
+        kept = _bound_history(history)
+        self.assertLess(len(kept), len(history))
+        self.assertEqual(kept[-2:], tick_native(6))
+
+    def test_every_turn_is_bounded(self):
+        a = agent(history=[m for n in range(10) for m in tick_split(n)])
+        a._turn("[SCREEN TICK] 12:00", SCREEN, agent=Forget._hermes(self))
+        self.assertLess(len(brain._split_turns(a.history)), 10)
+
+
+class AgentsHaveNoImageToolsOrCompression(unittest.TestCase):
+    """_make_agent asks Hermes for no vision toolset and turns its context compression off."""
+
+    def test_make_agent(self):
+        made = []
+
+        class FakeAIAgent:
+            def __init__(self, **kw):
+                made.append(kw)
+                names = ["web_search", "web_extract", "read_file", "search_files", "write_file", "patch",
+                         "vision_analyze", "terminal", "delegate_task"]
+                self.tools = [{"function": {"name": n}} for n in names]
+                self.compression_enabled = True
+                self.context_compressor = types.SimpleNamespace(_micro_compact_enabled=True)
+
+        fake = types.ModuleType("run_agent")
+        fake.AIAgent = FakeAIAgent
+        with mock.patch.dict(sys.modules, {"run_agent": fake}):
+            for actions in (False, True):
+                with self.subTest(actions=actions):
+                    a = brain._make_agent(ModelSpec("anthropic", "m"), "P", "", tools=True, max_iterations=2, actions=actions)
+                    self.assertNotIn("vision", made[-1]["enabled_toolsets"])
+                    self.assertNotIn("vision_analyze", a.valid_tool_names)
+                    self.assertFalse(a.compression_enabled)
+                    self.assertFalse(a.context_compressor._micro_compact_enabled)
 
 
 if __name__ == "__main__":
